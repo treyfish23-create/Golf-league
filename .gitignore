@@ -1,0 +1,28 @@
+# Firebase
+.firebase/
+.firebaserc
+
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.local
+*.pem
+
+# Build artifacts
+dist/
+build/
+
+# Editor
+.DS_Store
+.vscode/
+*.swp
+*~
+
+# Functions
+functions/node_modules/
+
+# Logs
+*.log
+npm-debug.log*
