@@ -2568,6 +2568,29 @@ input[type="range"]::-webkit-slider-runnable-track {
   margin-left: 5px;
 }
 
+/* Absent toggle in score modal */
+.sg-absent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--mt);
+  cursor: pointer;
+  margin-top: 2px;
+}
+.sg-absent-toggle input { width: 14px; height: 14px; }
+.sg-absent-label {
+  font-size: 10px;
+  color: #e74c3c;
+  font-weight: 600;
+}
+.sg-player-row.sg-absent input.score-inp:disabled {
+  background: rgba(231,76,60,0.08);
+  color: var(--mt);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 /* Stroke indicator cell */
 .score-grid td.has-stroke { position: relative; }
 .score-grid td.has-stroke::after {

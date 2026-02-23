@@ -4728,21 +4728,33 @@ function openMatch(matchKey) {
   const hcp1lo = hcp(t1lo), hcp1hi = hcp(t1hi);
   const hcp2lo = hcp(t2lo), hcp2hi = hcp(t2hi);
 
-  // Existing scores (if any)
+  // Existing scores (if any) — clean copy for input fields
   const scores = match.scores || {};
-
-  // Inject absent scores for players who haven't entered any scores yet
-  // or who have been manually marked absent by the commissioner
   const absentRule = _getAbsentRule(config);
   const absentOverrides = config?.absentOverrides || {};
+
+  // Only inject absent scores for explicitly flagged-absent players (inputs show generated scores, disabled)
+  if (!['forfeit', 'half_pts', 'sub'].includes(absentRule)) {
+    [t1lo, t1hi, t2lo, t2hi].forEach(player => {
+      if (!player) return;
+      const overrideKey = `w${match.week}_${player.id}`;
+      if (absentOverrides[overrideKey]) {
+        scores[player.id] = getAbsentScore(player.id, config, match.date);
+      }
+      // Non-flagged players with no scores → leave blank (no dummy fill)
+    });
+  }
+
+  // Separate preview scores for points calculation (includes absent fills for all missing)
+  const previewScores = JSON.parse(JSON.stringify(scores));
   if (!['forfeit', 'half_pts', 'sub'].includes(absentRule)) {
     [t1lo, t1hi, t2lo, t2hi].forEach(player => {
       if (!player) return;
       const overrideKey = `w${match.week}_${player.id}`;
       const isOverrideAbsent = absentOverrides[overrideKey];
-      const existing = scores[player.id];
+      const existing = previewScores[player.id];
       if (isOverrideAbsent || !existing || !existing.some(s => s > 0)) {
-        scores[player.id] = getAbsentScore(player.id, config, match.date);
+        previewScores[player.id] = getAbsentScore(player.id, config, match.date);
       }
     });
   }
@@ -4762,16 +4774,16 @@ function openMatch(matchKey) {
   _renderModalStatusBar(status, match);
 
   // Build HI and LO grids
-  _buildScoreGrid('modal-hi-grid', t1hi, t2hi, hcp1hi, hcp2hi, holes, scores, canEdit, 'hi');
-  _buildScoreGrid('modal-lo-grid', t1lo, t2lo, hcp1lo, hcp2lo, holes, scores, canEdit, 'lo');
+  _buildScoreGrid('modal-hi-grid', t1hi, t2hi, hcp1hi, hcp2hi, holes, scores, canEdit, 'hi', match.week, absentOverrides);
+  _buildScoreGrid('modal-lo-grid', t1lo, t2lo, hcp1lo, hcp2lo, holes, scores, canEdit, 'lo', match.week, absentOverrides);
 
   document.getElementById('modal-hi-label').textContent =
     `${t1hi?.name || '?'} vs ${t2hi?.name || '?'}`;
   document.getElementById('modal-lo-label').textContent =
     `${t1lo?.name || '?'} vs ${t2lo?.name || '?'}`;
 
-  // Initial pts render
-  _updateModalPts(holes, scores, t1lo, t1hi, t2lo, t2hi, hcp1lo, hcp1hi, hcp2lo, hcp2hi);
+  // Initial pts render (uses previewScores with absent fills for accurate points)
+  _updateModalPts(holes, previewScores, t1lo, t1hi, t2lo, t2hi, hcp1lo, hcp1hi, hcp2lo, hcp2hi);
 
   // Footer actions
   _renderModalFooter(status, match, uid, isCommish,
@@ -4811,14 +4823,17 @@ function _renderModalStatusBar(status, match) {
   bar.textContent = s.txt;
 }
 
-function _buildScoreGrid(tableId, p1, p2, hcp1, hcp2, holes, scores, canEdit, hilo) {
+function _buildScoreGrid(tableId, p1, p2, hcp1, hcp2, holes, scores, canEdit, hilo, week, absentOverrides) {
   const table = document.getElementById(tableId);
   if (!table) return;
+  absentOverrides = absentOverrides || {};
 
   const strokes1 = getHcpStrokes(Math.max(0, hcp1 - hcp2), holes);
   const strokes2 = getHcpStrokes(Math.max(0, hcp2 - hcp1), holes);
   const s1 = scores[p1?.id] || [];
   const s2 = scores[p2?.id] || [];
+  const isAbsent1 = !!(p1 && absentOverrides[`w${week}_${p1.id}`]);
+  const isAbsent2 = !!(p2 && absentOverrides[`w${week}_${p2.id}`]);
 
   // Build header row: Hole numbers
   const holeNums = holes.map(h => h.hole);
@@ -4838,9 +4853,9 @@ function _buildScoreGrid(tableId, p1, p2, hcp1, hcp2, holes, scores, canEdit, hi
   html += `<tbody>`;
 
   // Player 1 row
-  html += _scoreRow(p1, s1, strokes1, holes, canEdit, hilo, 'p1');
+  html += _scoreRow(p1, s1, strokes1, holes, canEdit, hilo, 'p1', isAbsent1);
   // Player 2 row
-  html += _scoreRow(p2, s2, strokes2, holes, canEdit, hilo, 'p2');
+  html += _scoreRow(p2, s2, strokes2, holes, canEdit, hilo, 'p2', isAbsent2);
 
   html += `</tbody>`;
   table.innerHTML = html;
@@ -4851,13 +4866,19 @@ function _buildScoreGrid(tableId, p1, p2, hcp1, hcp2, holes, scores, canEdit, hi
   });
 }
 
-function _scoreRow(player, scores, strokes, holes, canEdit, hilo, slot) {
+function _scoreRow(player, scores, strokes, holes, canEdit, hilo, slot, isAbsent) {
   if (!player) return `<tr><td class="sg-name-col" colspan="${holes.length + 2}">—</td></tr>`;
   const total = scores.reduce((a, b) => a + (parseInt(b) || 0), 0);
-  return `<tr class="sg-player-row" data-player-id="${player.id}" data-hilokey="${hilo}-${slot}">
+  const disabled = isAbsent ? 'disabled' : '';
+  return `<tr class="sg-player-row${isAbsent ? ' sg-absent' : ''}" data-player-id="${player.id}" data-hilokey="${hilo}-${slot}">
     <td class="sg-name-col">
       <span class="sg-player-name">${player.name}</span>
       <span class="sg-hcp-badge">+${Math.round(strokes.reduce((a,b)=>a+b,0))}</span>
+      ${canEdit ? `<label class="sg-absent-toggle">
+        <input type="checkbox" class="absent-check" data-player="${player.id}"
+          ${isAbsent ? 'checked' : ''} onchange="togglePlayerAbsent('${player.id}', this.checked)">
+        <span>Absent</span>
+      </label>` : (isAbsent ? '<span class="sg-absent-label">Absent</span>' : '')}
     </td>
     ${holes.map((h, i) => {
       const val = scores[i] != null ? scores[i] : '';
@@ -4866,7 +4887,7 @@ function _scoreRow(player, scores, strokes, holes, canEdit, hilo, slot) {
         ? `<td class="${hasStroke ? 'has-stroke' : ''}">
              <input class="score-inp" type="number" min="1" max="12"
                data-player="${player.id}" data-hole="${i}" data-hilokey="${hilo}"
-               value="${val}" placeholder="${h.par}">
+               value="${val}" placeholder="${h.par}" ${disabled}>
            </td>`
         : `<td class="${hasStroke ? 'has-stroke' : ''} ${_netClass(val, h.par, strokes[i])}">${val || '–'}</td>`;
     }).join('')}
@@ -4902,6 +4923,22 @@ function _onScoreInput(hiloKey) {
 
   // Read current scores from inputs
   const liveScores = _readInputScores();
+
+  // Inject absent scores for players with no input (for live preview only)
+  const absentRule = _getAbsentRule(config);
+  const absentOverrides = config?.absentOverrides || {};
+  if (!['forfeit', 'half_pts', 'sub'].includes(absentRule)) {
+    [t1lo, t1hi, t2lo, t2hi].forEach(player => {
+      if (!player) return;
+      const overrideKey = `w${match.week}_${player.id}`;
+      const isOverrideAbsent = absentOverrides[overrideKey];
+      const existing = liveScores[player.id];
+      if (isOverrideAbsent || !existing || !existing.some(s => s > 0)) {
+        liveScores[player.id] = getAbsentScore(player.id, config, match.date);
+      }
+    });
+  }
+
   _updateModalPts(holes, liveScores, t1lo, t1hi, t2lo, t2hi,
     hcp(t1lo), hcp(t1hi), hcp(t2lo), hcp(t2hi));
 }
@@ -4915,6 +4952,26 @@ function _readInputScores() {
     scores[pid][i] = parseInt(inp.value) || 0;
   });
   return scores;
+}
+
+async function togglePlayerAbsent(playerId, checked) {
+  const match = APP.matches[_modalMatchKey];
+  if (!match) return;
+  const key = `w${match.week}_${playerId}`;
+
+  if (!APP.config.absentOverrides) APP.config.absentOverrides = {};
+
+  if (checked) {
+    APP.config.absentOverrides[key] = true;
+  } else {
+    delete APP.config.absentOverrides[key];
+  }
+
+  // Save to Firestore
+  await window._FB.saveLeagueConfig({ absentOverrides: APP.config.absentOverrides });
+
+  // Re-open the modal to refresh the grid with absent state
+  openMatch(_modalMatchKey);
 }
 
 function _updateModalPts(holes, scores, t1lo, t1hi, t2lo, t2hi,
