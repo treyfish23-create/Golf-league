@@ -4024,7 +4024,7 @@ async function showClaimModal() {
 
   const options = unclaimed.length
     ? `<option value="">— Select your name —</option>` +
-      unclaimed.map(p => `<option value="${p.id}">${p.name} (${p.teamName} · ${p.hilo})</option>`).join('')
+      unclaimed.map(p => `<option value="${p.id}">${p.name} (${p.teamName}${p.hilo ? ' · ' + p.hilo : ''})</option>`).join('')
     : `<option value="">No unclaimed players</option>`;
 
   overlay.innerHTML = `
@@ -4156,7 +4156,7 @@ async function renderAdminMembers() {
       : '<span class="member-role-badge player">Player</span>';
 
     const playerInfo = player
-      ? `<span style="color:var(--gd)">${player.name}</span> <span style="color:var(--mt);font-size:12px">(${player.teamName} · ${player.hilo})</span>`
+      ? `<span style="color:var(--gd)">${player.name}</span> <span style="color:var(--mt);font-size:12px">(${player.teamName}${player.hilo ? ' · ' + player.hilo : ''})</span>`
       : '<span style="color:var(--mt);font-style:italic">Unlinked</span>';
 
     // Actions (don't show remove for commissioner)
@@ -4197,7 +4197,7 @@ async function renderAdminMembers() {
     <div class="unclaimed-player-row">
       <span>👤</span>
       <span>${p.name}</span>
-      <span style="color:var(--mt);font-size:12px">${p.teamName} · ${p.hilo}</span>
+      <span style="color:var(--mt);font-size:12px">${p.teamName}${p.hilo ? ' · ' + p.hilo : ''}</span>
     </div>
   `).join('');
 
@@ -5185,6 +5185,19 @@ async function loadLeague(leagueId) {
         Object.assign(APP.member, patch);
       }
     }
+
+    // Sync user league index role if it drifted from actual membership role
+    if (APP.member?.role) {
+      const { loadUserLeagues, addUserLeagueIndex } = window._FB;
+      try {
+        const leagues = await loadUserLeagues(uid);
+        const idx = leagues.find(l => l.leagueId === leagueId);
+        if (idx && idx.role !== APP.member.role) {
+          console.log('[loadLeague] syncing index role:', idx.role, '→', APP.member.role);
+          addUserLeagueIndex(uid, leagueId, idx.name, APP.member.role).catch(() => {});
+        }
+      } catch (e) { /* non-critical */ }
+    }
   }
 
   // Real-time listeners
@@ -5334,18 +5347,21 @@ async function handleJoinLeague() {
       return;
     }
 
-    await joinLeague(uid, league.id, {
+    const result = await joinLeague(uid, league.id, {
       displayName: user?.displayName || '',
       email: user?.email || ''
     });
 
-    toast(`Joined ${league.name}!`, 'success');
-    // Auto-load the joined league
+    if (result?.alreadyMember) {
+      toast(`Already in ${league.name} — loading`, 'success');
+    } else {
+      toast(`Joined ${league.name}!`, 'success');
+    }
+    // Auto-load the league either way
     await loadLeague(league.id);
   } catch (err) {
     console.error('[Join]', err);
-    const msg = err.message === 'Already a member' ? 'You\'re already in this league' : 'Failed to join — try again';
-    if (errEl) { errEl.textContent = msg; errEl.style.display = ''; }
+    if (errEl) { errEl.textContent = 'Failed to join — try again'; errEl.style.display = ''; }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Join'; }
   }

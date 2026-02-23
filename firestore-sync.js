@@ -22,6 +22,10 @@ export function initFirestore() {
 
 // ===== League switch =====
 export function setActiveLeague(leagueId) {
+  if (!leagueId) {
+    console.warn('[Firestore] setActiveLeague called with falsy leagueId:', leagueId);
+    return;
+  }
   _teardownListeners();
   _leagueId = leagueId;
   window._leagueId = leagueId;
@@ -86,7 +90,7 @@ export async function joinLeague(uid, leagueId, profile) {
   const db = window._db;
   // Check if already a member
   const existing = await getDoc(doc(db, 'leagues', leagueId, 'members', uid));
-  if (existing.exists()) throw new Error('Already a member');
+  if (existing.exists()) return { alreadyMember: true, membership: existing.data() };
 
   // Load league name for the index doc
   const leagueSnap = await getDoc(doc(db, 'leagues', leagueId));
@@ -106,6 +110,8 @@ export async function joinLeague(uid, leagueId, profile) {
 
   // Increment memberCount
   await updateDoc(doc(db, 'leagues', leagueId), { memberCount: increment(1) });
+
+  return { alreadyMember: false };
 }
 
 // Remove a member from the current league
@@ -202,7 +208,7 @@ export async function saveMatch(matchKey, data) {
 
 // Real-time listener for all matches in this league
 export function listenMatches(cb) {
-  if (!_leagueId) return;
+  if (!_leagueId) { console.warn('[Firestore] listenMatches: no active league'); return; }
   const unsub = onSnapshot(matchesRef(_leagueId), snap => {
     const matches = {};
     snap.docs.forEach(d => { matches[d.id] = d.data(); });
@@ -226,7 +232,7 @@ export async function savePlayerRounds(playerId, rounds) {
 
 // Real-time listener for all playerRounds in this league
 export function listenPlayerRounds(cb) {
-  if (!_leagueId) return;
+  if (!_leagueId) { console.warn('[Firestore] listenPlayerRounds: no active league'); return; }
   const db = window._db;
   const col = collection(db, 'leagues', _leagueId, 'playerRounds');
   const unsub = onSnapshot(col, snap => {
@@ -239,7 +245,7 @@ export function listenPlayerRounds(cb) {
 
 // ===== Real-time League Config Listener =====
 export function listenLeagueConfig(cb) {
-  if (!_leagueId) return;
+  if (!_leagueId) { console.warn('[Firestore] listenLeagueConfig: no active league'); return; }
   const unsub = onSnapshot(leagueConfigRef(_leagueId), snap => {
     if (!snap.exists()) { cb(null); return; }
     const data = snap.data();
