@@ -1658,26 +1658,45 @@ function calcHcp(rounds, config) {
   const useBest   = hcpConfig.useBest ?? true;
   const par       = config?.course?.scorecard?.front?.reduce((a, h) => a + h.par, 0) || 35;
 
+  // WHS slope/rating (optional — when both set, use differential formula)
+  const slope   = config?.course?.slope;
+  const rating  = config?.course?.rating;
+  const useWHS  = slope > 0 && rating > 0;
+  const rating9 = useWHS ? rating / 2 : null;  // 9-hole course rating
+
   if (!rounds || rounds.length === 0) return 0;
 
-  const scores = rounds
+  const recent = rounds
     .slice()
     .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, numRounds)
-    .map(r => r.grossScore || r.score || 0)
-    .filter(s => s > 0);
+    .slice(0, numRounds);
 
-  if (scores.length === 0) return 0;
+  // Convert to either differentials (WHS) or raw scores (league formula)
+  const values = recent
+    .map(r => {
+      const gross = r.grossScore || r.score || 0;
+      if (gross <= 0) return null;
+      if (useWHS) return (113 / slope) * (gross - rating9);
+      return gross;
+    })
+    .filter(v => v !== null);
 
-  let val;
-  if (useBest && scores.length >= numRounds) {
-    const best = scores.slice().sort((a, b) => a - b).slice(0, numRounds);
-    val = best.reduce((a, b) => a + b, 0) / best.length;
+  if (values.length === 0) return 0;
+
+  let avg;
+  if (useBest && values.length >= numRounds) {
+    const best = values.slice().sort((a, b) => a - b).slice(0, numRounds);
+    avg = best.reduce((a, b) => a + b, 0) / best.length;
   } else {
-    val = scores.reduce((a, b) => a + b, 0) / scores.length;
+    avg = values.reduce((a, b) => a + b, 0) / values.length;
   }
 
-  const hcp = Math.round((val - par) * factor * 10) / 10;
+  // WHS: differentials are already relative to rating, just apply factor
+  // League: subtract par first, then apply factor
+  const hcp = useWHS
+    ? Math.round(avg * factor * 10) / 10
+    : Math.round((avg - par) * factor * 10) / 10;
+
   return Math.min(Math.max(hcp, 0), maxHcp);
 }
 
@@ -2218,8 +2237,15 @@ function renderHandicaps() {
     </div>
   `).join('');
 
+  const par = config?.course?.scorecard?.front?.reduce((a, h) => a + h.par, 0) || 35;
+  const useWHS = (config?.course?.slope > 0 && config?.course?.rating > 0);
+  const formulaBanner = useWHS
+    ? `<div class="hcp-formula-banner">WHS Formula · Rating ${config.course.rating} · Slope ${config.course.slope}</div>`
+    : `<div class="hcp-formula-banner">League Formula · Par ${par}</div>`;
+
   el.innerHTML = `
     <div class="mt-12">
+      ${formulaBanner}
       <div class="hcp-grid">${cards || '<div class="empty-state"><p>No players yet</p></div>'}</div>
     </div>
   `;
@@ -3375,6 +3401,15 @@ function renderAdminSettings() {
           <label>Tees</label>
           <input class="field" id="as-course-tees" value="${c.course?.tees || ''}" />
         </div>
+        <div class="settings-row">
+          <label>Course Rating (18-hole)</label>
+          <input class="field" type="number" id="as-course-rating" value="${c.course?.rating || ''}" min="55" max="80" step="0.1" placeholder="e.g. 70.7" />
+        </div>
+        <div class="settings-row">
+          <label>Slope Rating</label>
+          <input class="field" type="number" id="as-course-slope" value="${c.course?.slope || ''}" min="55" max="155" step="1" placeholder="e.g. 125" />
+        </div>
+        <p class="admin-help-text">Optional: When both are set, handicaps use the WHS differential formula. Leave empty for the default league formula.</p>
       </div>
 
       <!-- Scoring Format -->
@@ -3753,6 +3788,8 @@ async function adminSaveSettings() {
       name:     document.getElementById('as-course-name')?.value?.trim() || '',
       location: document.getElementById('as-course-location')?.value?.trim() || '',
       tees:     document.getElementById('as-course-tees')?.value?.trim() || '',
+      rating:   parseFloat(document.getElementById('as-course-rating')?.value) || null,
+      slope:    parseInt(document.getElementById('as-course-slope')?.value) || null,
     },
     // pointValues & absentRule saved at TOP LEVEL (wizard writes them here, scoring reads from here)
     pointValues: {

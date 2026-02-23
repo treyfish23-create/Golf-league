@@ -1297,6 +1297,14 @@ input[type="time"] {
 .chip-draft    { background: rgba(122,154,122,0.1); color: var(--mt); border: 1px solid var(--bd); }
 
 /* ===== Handicap Tab ===== */
+.hcp-formula-banner {
+  text-align: center;
+  color: var(--mt);
+  font-size: 12px;
+  padding: 6px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--bd);
+}
 .hcp-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
