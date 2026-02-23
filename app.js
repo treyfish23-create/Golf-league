@@ -1655,7 +1655,7 @@ function calcHcp(rounds, config) {
   const numRounds = hcpConfig.rounds || 5;
   const factor    = hcpConfig.factor ?? 0.9;
   const maxHcp    = hcpConfig.max    ?? 18;
-  const useBest   = hcpConfig.useBest ?? true;
+  const drop      = hcpConfig.drop || 'none';
   const par       = config?.course?.scorecard?.front?.reduce((a, h) => a + h.par, 0) || 35;
 
   // WHS slope/rating (optional — when both set, use differential formula)
@@ -1683,13 +1683,15 @@ function calcHcp(rounds, config) {
 
   if (values.length === 0) return 0;
 
-  let avg;
-  if (useBest && values.length >= numRounds) {
-    const best = values.slice().sort((a, b) => a - b).slice(0, numRounds);
-    avg = best.reduce((a, b) => a + b, 0) / best.length;
-  } else {
-    avg = values.reduce((a, b) => a + b, 0) / values.length;
+  // Drop outlier scores before averaging
+  let filtered = values.slice();
+  if (drop !== 'none' && filtered.length > 2) {
+    filtered.sort((a, b) => a - b);
+    if (drop === 'low' || drop === 'both') filtered = filtered.slice(1);
+    if (drop === 'high' || drop === 'both') filtered = filtered.slice(0, -1);
   }
+
+  const avg = filtered.reduce((a, b) => a + b, 0) / filtered.length;
 
   // WHS: differentials are already relative to rating, just apply factor
   // League: subtract par first, then apply factor
@@ -2258,7 +2260,7 @@ function renderSchedule() {
 
   const schedule = APP.config.schedule || [];
   const cancelled = APP.config.cancelledWeeks || {};
-  const startTime = APP.config.startTeeTime || '';
+  const startTime = APP.config.startTeeTime || APP.config.teeTime || '';
   const interval  = APP.config.teeInterval || 10;
 
   if (!schedule.length) {
@@ -3285,6 +3287,9 @@ function renderAdminSettings() {
   const hcpConfig = c.handicap || {};
   const fmtConfig = c.format || {};
   const pv = _getPV(APP.config);
+  // Normalize handicap system type — wizard writes "custom" / admin used to write "custom_rolling"
+  const sysType = (hcpConfig.type === 'custom_rolling' ? 'custom' : hcpConfig.type) || hcpConfig.system || 'custom';
+  const dropVal = hcpConfig.drop || 'none';
   const schedule  = c.schedule || [];
   const teams     = c.teams || [];
   const manAdj    = c.manualAdj || {};
@@ -3358,7 +3363,7 @@ function renderAdminSettings() {
         </div>
         <div class="settings-row">
           <label>Start Tee Time</label>
-          <input class="field" type="time" id="as-tee-time" value="${c.startTeeTime || ''}" />
+          <input class="field" type="time" id="as-tee-time" value="${c.startTeeTime || c.teeTime || ''}" />
         </div>
         <div class="settings-row">
           <label>Tee Interval (min)</label>
@@ -3457,31 +3462,45 @@ function renderAdminSettings() {
       <div class="admin-section">
         <div class="admin-section-title">Handicap System</div>
         <div class="settings-row">
-          <label>System Type</label>
-          <select class="field" id="as-hcp-type">
-            ${['custom_rolling','whs','manual','scratch'].map(t =>
-              `<option value="${t}" ${(hcpConfig.type || 'custom_rolling') === t ? 'selected' : ''}>${t.replace(/_/g, ' ')}</option>`
-            ).join('')}
-          </select>
+          <label>Handicap System</label>
+          <div class="toggle-group" id="as-tg-hcpsys">
+            <button type="button" class="toggle-btn ${sysType === 'custom' ? 'active' : ''}" data-value="custom">Custom Rolling</button>
+            <button type="button" class="toggle-btn ${sysType === 'whs' ? 'active' : ''}" data-value="whs">WHS</button>
+            <button type="button" class="toggle-btn ${sysType === 'manual' ? 'active' : ''}" data-value="manual">Manual</button>
+            <button type="button" class="toggle-btn ${sysType === 'scratch' ? 'active' : ''}" data-value="scratch">Scratch</button>
+          </div>
+          <input type="hidden" id="as-hcp-type" value="${sysType}" />
         </div>
-        <div class="settings-row">
-          <label>Rounds Used</label>
-          <input class="field" type="number" id="as-hcp-rounds" value="${hcpConfig.rounds ?? 5}" min="1" max="20" />
-        </div>
-        <div class="settings-row">
-          <label>Use Best N of Last N</label>
-          <label class="toggle-switch">
-            <input type="checkbox" id="as-hcp-usebest" ${(hcpConfig.useBest ?? true) ? 'checked' : ''} />
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <div class="settings-row">
-          <label>Reduction Factor</label>
-          <input class="field" type="number" id="as-hcp-factor" value="${hcpConfig.factor ?? 0.9}" min="0" max="1" step="0.05" />
-        </div>
-        <div class="settings-row">
-          <label>Max Handicap</label>
-          <input class="field" type="number" id="as-hcp-max" value="${hcpConfig.max ?? 18}" min="0" max="36" />
+        <div id="as-hcp-custom-settings" style="display:${['scratch','manual'].includes(sysType) ? 'none' : ''}">
+          <div class="settings-row">
+            <label>Rounds Used to Calculate</label>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
+              <input type="range" id="as-hcp-rounds" min="1" max="20" value="${hcpConfig.rounds ?? 5}" style="flex:1"
+                oninput="document.getElementById('as-hcp-rounds-display').textContent=this.value" />
+              <span id="as-hcp-rounds-display" style="font-size:18px;font-weight:700;color:var(--ac);min-width:28px">${hcpConfig.rounds ?? 5}</span>
+            </div>
+          </div>
+          <div class="settings-row">
+            <label>Drop Scores</label>
+            <div class="toggle-group" id="as-tg-hcpdrop">
+              <button type="button" class="toggle-btn ${dropVal === 'none' ? 'active' : ''}" data-value="none">None</button>
+              <button type="button" class="toggle-btn ${dropVal === 'low' ? 'active' : ''}" data-value="low">Drop Lowest</button>
+              <button type="button" class="toggle-btn ${dropVal === 'high' ? 'active' : ''}" data-value="high">Drop Highest</button>
+              <button type="button" class="toggle-btn ${dropVal === 'both' ? 'active' : ''}" data-value="both">Drop Both</button>
+            </div>
+            <input type="hidden" id="as-hcp-drop" value="${dropVal}" />
+          </div>
+          <div class="settings-row-pair">
+            <div class="settings-row">
+              <label>Reduction Factor</label>
+              <input class="field" type="number" id="as-hcp-factor" value="${hcpConfig.factor ?? 0.9}" min="0.5" max="1" step="0.05" />
+              <p class="admin-help-text" style="margin-top:2px">0.9 = 90% of index</p>
+            </div>
+            <div class="settings-row">
+              <label>Max Handicap</label>
+              <input class="field" type="number" id="as-hcp-max" value="${hcpConfig.max ?? 18}" min="1" max="54" />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3494,6 +3513,30 @@ function renderAdminSettings() {
             <thead><tr><th>Player</th><th>Calc</th><th>Adj</th><th>Final</th></tr></thead>
             <tbody>${hcpAdjRows}</tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Absent Player Overrides -->
+      <div class="admin-section">
+        <div class="admin-section-title">Mark Players Absent</div>
+        <p class="admin-help-text">Mark a player absent for a specific week. Their score will be generated using the Missing Player Rule above.</p>
+        <div class="settings-row" style="display:flex;gap:8px;align-items:flex-end">
+          <div style="flex:1">
+            <label>Week</label>
+            <select class="field" id="as-absent-ovr-week">
+              ${schedule.map(w => `<option value="${w.week}">Week ${w.week}${w.date ? ' — ' + w.date : ''}</option>`).join('')}
+            </select>
+          </div>
+          <div style="flex:1">
+            <label>Player</label>
+            <select class="field" id="as-absent-ovr-player">
+              ${allPlayers.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+            </select>
+          </div>
+          <button type="button" class="btn btn-green btn-sm" onclick="adminMarkAbsent()">Mark Absent</button>
+        </div>
+        <div id="as-absent-ovr-list" class="absent-overrides-list">
+          ${_renderAbsentOverrides(c, allPlayers, schedule)}
         </div>
       </div>
 
@@ -3614,6 +3657,87 @@ function renderAdminSettings() {
     const row = document.getElementById('as-absent-fixed-row');
     if (row) row.style.display = e.target.value === 'fixed_score' ? '' : 'none';
   });
+
+  // Handicap system toggle buttons
+  document.getElementById('as-tg-hcpsys')?.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#as-tg-hcpsys .toggle-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('as-hcp-type').value = btn.dataset.value;
+      const custom = document.getElementById('as-hcp-custom-settings');
+      if (custom) custom.style.display = ['scratch','manual'].includes(btn.dataset.value) ? 'none' : '';
+    });
+  });
+
+  // Drop scores toggle buttons
+  document.getElementById('as-tg-hcpdrop')?.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#as-tg-hcpdrop .toggle-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('as-hcp-drop').value = btn.dataset.value;
+    });
+  });
+}
+
+// ---- Absent Player Overrides ----
+function _renderAbsentOverrides(config, allPlayers, schedule) {
+  const overrides = config.absentOverrides || {};
+  const keys = Object.keys(overrides).filter(k => overrides[k]);
+  if (!keys.length) return '<p class="admin-help-text" style="opacity:0.5">No absent overrides yet.</p>';
+
+  return keys.sort().map(key => {
+    // key format: "w3_p5"
+    const [wPart, pPart] = key.split('_');
+    const weekNum = wPart.replace('w', '');
+    const player = allPlayers.find(p => p.id === pPart);
+    const weekEntry = schedule.find(w => String(w.week) === weekNum);
+    const dateStr = weekEntry?.date ? ' — ' + weekEntry.date : '';
+    return `<div class="absent-override-row">
+      <span>Week ${weekNum}${dateStr} · <strong>${player?.name || pPart}</strong></span>
+      <button type="button" class="btn-xs btn-danger" onclick="adminRemoveAbsent('${key}')" title="Remove">✕</button>
+    </div>`;
+  }).join('');
+}
+
+async function adminMarkAbsent() {
+  const week = document.getElementById('as-absent-ovr-week')?.value;
+  const playerId = document.getElementById('as-absent-ovr-player')?.value;
+  if (!week || !playerId) { toast('Select a week and player', 'error'); return; }
+
+  const key = `w${week}_${playerId}`;
+  if (!APP.config.absentOverrides) APP.config.absentOverrides = {};
+
+  if (APP.config.absentOverrides[key]) {
+    toast('Player already marked absent for that week', 'error');
+    return;
+  }
+
+  APP.config.absentOverrides[key] = true;
+
+  try {
+    await window._FB.saveLeagueConfig({ absentOverrides: APP.config.absentOverrides });
+    toast('Player marked absent', 'success');
+    renderAdminSettings();
+    renderScores();
+  } catch (err) {
+    console.error('[adminMarkAbsent]', err);
+    toast('Failed to save', 'error');
+  }
+}
+
+async function adminRemoveAbsent(key) {
+  if (!APP.config.absentOverrides) return;
+  delete APP.config.absentOverrides[key];
+
+  try {
+    await window._FB.saveLeagueConfig({ absentOverrides: APP.config.absentOverrides });
+    toast('Absent override removed', 'success');
+    renderAdminSettings();
+    renderScores();
+  } catch (err) {
+    console.error('[adminRemoveAbsent]', err);
+    toast('Failed to save', 'error');
+  }
 }
 
 // ---- Custom / Makeup Rounds ----
@@ -3809,9 +3933,9 @@ async function adminSaveSettings() {
     },
     handicap: {
       ...(APP.config.handicap || {}),
-      type:    document.getElementById('as-hcp-type')?.value || 'custom_rolling',
+      type:    document.getElementById('as-hcp-type')?.value || 'custom',
       rounds:  parseInt(document.getElementById('as-hcp-rounds')?.value) || 5,
-      useBest: document.getElementById('as-hcp-usebest')?.checked ?? true,
+      drop:    document.getElementById('as-hcp-drop')?.value || 'none',
       factor:  parseFloat(document.getElementById('as-hcp-factor')?.value) || 0.9,
       max:     parseInt(document.getElementById('as-hcp-max')?.value) || 18,
     }
@@ -4365,7 +4489,7 @@ function renderScores() {
   const uid = APP.user?.uid || window._currentUser?.uid;
   const isCommish = APP.member?.role === 'commissioner';
   const cancelled = APP.config?.cancelledWeeks || {};
-  const startTime = APP.config?.startTeeTime || '';
+  const startTime = APP.config?.startTeeTime || APP.config?.teeTime || '';
   const interval  = APP.config?.teeInterval || 10;
 
   // Custom round lookup for labels
@@ -4595,13 +4719,16 @@ function openMatch(matchKey) {
   const scores = match.scores || {};
 
   // Inject absent scores for players who haven't entered any scores yet
-  // Uses the configured absent rule so the live point preview is accurate
+  // or who have been manually marked absent by the commissioner
   const absentRule = _getAbsentRule(config);
+  const absentOverrides = config?.absentOverrides || {};
   if (!['forfeit', 'half_pts', 'sub'].includes(absentRule)) {
     [t1lo, t1hi, t2lo, t2hi].forEach(player => {
       if (!player) return;
+      const overrideKey = `w${match.week}_${player.id}`;
+      const isOverrideAbsent = absentOverrides[overrideKey];
       const existing = scores[player.id];
-      if (!existing || !existing.some(s => s > 0)) {
+      if (isOverrideAbsent || !existing || !existing.some(s => s > 0)) {
         scores[player.id] = getAbsentScore(player.id, config, match.date);
       }
     });
