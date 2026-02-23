@@ -1340,8 +1340,6 @@ function _renderS5ImportSummary() {
     el.innerHTML = '<p style="color:var(--mt);font-size:13px;padding:12px 0">No history imported yet. You can upload CSV files on Step 1.</p>';
     return;
   }
-  const par = 35;
-  const factor = parseFloat(document.getElementById('wz-hcp-factor')?.value || '0.9');
   const totalRounds = imported.reduce((s, p) => s + p.scores.length, 0);
   let html = `<p style="font-size:12px;font-weight:600;color:var(--gd);margin-bottom:8px">✓ ${imported.length} players · ${totalRounds} rounds imported</p>`;
   html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
@@ -1356,8 +1354,7 @@ function _renderS5ImportSummary() {
     const grossScores = p.scores.map(s => s.grossScore);
     const avg = grossScores.reduce((a, b) => a + b, 0) / grossScores.length;
     const best = Math.min(...grossScores);
-    const sorted = [...grossScores].sort((a, b) => a - b).slice(0, 5);
-    const estHcp = Math.min(18, Math.round((sorted.reduce((a, b) => a + b, 0) / sorted.length - par) * factor));
+    const estHcp = _calcSeedHcp(p.scores);
     html += `<tr>
       <td style="padding:5px 8px;border-bottom:1px solid var(--bd)">${p.displayName}</td>
       <td style="padding:5px 8px;border-bottom:1px solid var(--bd);text-align:center">${grossScores.length}</td>
@@ -1534,8 +1531,6 @@ async function handleHcpCsvFiles(fileList) {
   APP.wizard._importedHistory = imported;
 
   // Render preview table
-  const par = 35; // 9-hole par
-  const factor = parseFloat(document.getElementById('wz-hcp-factor')?.value || '0.9');
   const tbody = document.getElementById('hcp-preview-tbody');
   const wrap  = document.getElementById('hcp-preview-wrap');
   const title = document.getElementById('hcp-preview-title');
@@ -1545,10 +1540,7 @@ async function handleHcpCsvFiles(fileList) {
       const grossScores = p.scores.map(s => s.grossScore);
       const avg  = grossScores.reduce((a, b) => a + b, 0) / grossScores.length;
       const best = Math.min(...grossScores);
-      // Simple estimated hcp using best 5 of available rounds
-      const sorted = [...grossScores].sort((a, b) => a - b).slice(0, 5);
-      const avgBest5 = sorted.reduce((a, b) => a + b, 0) / sorted.length;
-      const estHcp = Math.max(0, Math.min(18, Math.round((avgBest5 - par) * factor * 10) / 10));
+      const estHcp = _calcSeedHcp(p.scores);
       return `
         <tr>
           <td style="padding:5px 8px;border-bottom:1px solid var(--bd)">${p.displayName}</td>
@@ -1574,14 +1566,12 @@ async function handleHcpCsvFiles(fileList) {
     const existing = _pool.find(x => x.name.toLowerCase() === p.displayName.toLowerCase());
     if (!existing) {
       const id = `pool-${++_poolIdCounter}`;
-      const grossScores = p.scores.map(s => s.grossScore);
-      const hcp = _calcSeedHcp(grossScores);
+      const hcp = _calcSeedHcp(p.scores);
       _pool.push({ id, name: p.displayName, hcp });
       poolAdded++;
     } else if (existing.hcp == null) {
       // Backfill hcp for pool entries added before CSV import
-      const grossScores = p.scores.map(s => s.grossScore);
-      existing.hcp = _calcSeedHcp(grossScores);
+      existing.hcp = _calcSeedHcp(p.scores);
     }
   });
   _renderPool();
@@ -1598,14 +1588,39 @@ function clearHcpImport() {
   toast('Import cleared', 'info');
 }
 
-// Shared seed-hcp calculator. Returns decimal (e.g. 9.7), NOT rounded to int.
-function _calcSeedHcp(grossScores) {
-  if (!grossScores || !grossScores.length) return null;
+// Shared seed-hcp calculator using the same logic as calcHcp().
+// Accepts an array of {date, grossScore} objects (or plain numbers for legacy).
+// Reads wizard form fields for rounds/drop/factor/max settings.
+function _calcSeedHcp(scores) {
+  if (!scores || !scores.length) return null;
   const par = 35;
-  const factor = parseFloat(document.getElementById('wz-hcp-factor')?.value || '0.9');
-  const sorted = [...grossScores].sort((a, b) => a - b).slice(0, 5);
-  const avgBest5 = sorted.reduce((a, b) => a + b, 0) / sorted.length;
-  return Math.max(0, Math.min(18, Math.round((avgBest5 - par) * factor * 10) / 10));
+  const numRounds = parseInt(document.getElementById('wz-hcp-rounds-val')?.value || '5');
+  const drop      = document.getElementById('wz-hcp-drop-val')?.value || 'none';
+  const factor    = parseFloat(document.getElementById('wz-hcp-factor')?.value || '0.9');
+  const maxHcp    = parseInt(document.getElementById('wz-hcp-max')?.value || '18');
+
+  // Normalize: accept both [{date, grossScore}] and plain [number] arrays
+  let entries = scores.map(s => typeof s === 'number' ? { grossScore: s, date: '' } : s);
+
+  // Take most recent N rounds (same as calcHcp)
+  entries = entries
+    .filter(e => e.grossScore > 0)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .slice(0, numRounds);
+
+  let values = entries.map(e => e.grossScore);
+  if (!values.length) return 0;
+
+  // Drop outliers (same as calcHcp)
+  if (drop !== 'none' && values.length > 2) {
+    values.sort((a, b) => a - b);
+    if (drop === 'low' || drop === 'both') values = values.slice(1);
+    if (drop === 'high' || drop === 'both') values = values.slice(0, -1);
+  }
+
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  const hcp = Math.round((avg - par) * factor * 10) / 10;
+  return Math.min(Math.max(hcp, 0), maxHcp);
 }
 
 // Try to auto-fill seed handicap inputs on Step 2 rows
@@ -1627,8 +1642,7 @@ function _applySeedHcpsFromHistory(imported) {
     });
     if (!match) return;
 
-    const grossScores = match.scores.map(s => s.grossScore);
-    const estHcp = _calcSeedHcp(grossScores);
+    const estHcp = _calcSeedHcp(match.scores);
     if (estHcp != null) {
       hcpInp.value = Math.round(estHcp);
       hcpInp.dataset.preciseHcp = estHcp;
@@ -1642,8 +1656,7 @@ function _applySeedHcpsFromHistory(imported) {
       p.name.toLowerCase() === imp.name.toLowerCase()
     );
     if (match && match.hcp == null) {
-      const grossScores = imp.scores.map(s => s.grossScore);
-      match.hcp = _calcSeedHcp(grossScores);
+      match.hcp = _calcSeedHcp(imp.scores);
     }
   });
   _renderPool();
