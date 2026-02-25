@@ -537,6 +537,39 @@ export async function hardReset() {
   }, { merge: true });
 }
 
+// ===== Delete League =====
+export async function deleteLeague() {
+  if (!_leagueId) return;
+  const db = window._db;
+  const id = _leagueId;
+
+  // 1. Get all members first (need UIDs to clean user league indices)
+  const membersSnap = await getDocs(collection(db, 'leagues', id, 'members'));
+
+  // 2. Delete all subcollection docs
+  for (const sub of ['matches', 'playerRounds', 'members']) {
+    const snap = await getDocs(collection(db, 'leagues', id, sub));
+    for (const d of snap.docs) await deleteDoc(d.ref);
+  }
+
+  // 3. Delete config doc
+  try { await deleteDoc(leagueConfigRef(id)); } catch(e) { /* may not exist */ }
+
+  // 4. Delete each member's user league index
+  for (const m of membersSnap.docs) {
+    const uid = m.data().uid || m.id;
+    try { await deleteDoc(doc(db, 'users', uid, 'leagues', id)); } catch(e) { /* ok */ }
+  }
+
+  // 5. Delete top-level league doc
+  await deleteDoc(leagueRef(id));
+
+  // 6. Tear down listeners and clear state
+  _teardownListeners();
+  _leagueId = null;
+  window._leagueId = null;
+}
+
 // ===== Import League Data =====
 export async function importLeagueData(json) {
   if (!_leagueId) return;

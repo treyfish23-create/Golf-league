@@ -16,7 +16,7 @@ const APP = {
   wizard:    { step: 1, data: {} }
 };
 
-const VIEWS = ['splash', 'signin', 'signup', 'wizard', 'league-select', 'app'];
+const VIEWS = ['splash', 'signin', 'signup', 'forgot-password', 'verify-email', 'terms', 'privacy', 'wizard', 'league-select', 'app'];
 const TABS  = ['dashboard', 'scores', 'standings', 'handicaps', 'skins', 'stats', 'schedule',
                'recap', 'rules', 'history',
                'admin-members', 'admin-scores', 'admin-teams', 'admin-settings'];
@@ -26,6 +26,10 @@ const TABS  = ['dashboard', 'scores', 'standings', 'handicaps', 'skins', 'stats'
 function showView(id) {
   // Strip leading 'view-' if passed accidentally
   const bare = id.startsWith('view-') ? id.slice(5) : id;
+  // Track previous view for legal page back navigation
+  if (bare === 'terms' || bare === 'privacy') {
+    window._legalBackView = APP.view || 'signup';
+  }
   VIEWS.forEach(v => {
     const el = document.getElementById(`view-${v}`);
     if (el) el.classList.toggle('active', v === bare);
@@ -206,10 +210,11 @@ function wizardCollect(step) {
     d.teams = collectTeams();
   }
   if (step === 3) {                           // Course Setup
-    d.courseName   = document.getElementById('wz-course-name')?.value?.trim() || '';
-    d.courseCity   = document.getElementById('wz-course-city')?.value?.trim() || '';
-    d.tees         = document.getElementById('wz-tees')?.value?.trim() || '';
-    d.scorecard    = collectScorecardGrid();
+    d.courseName      = document.getElementById('wz-course-name')?.value?.trim() || '';
+    d.courseCity       = document.getElementById('wz-course-city')?.value?.trim() || '';
+    d.tees            = document.getElementById('wz-tees')?.value?.trim() || '';
+    d.scorecard       = collectScorecardGrid();
+    // golfCourseApiKey is hardcoded in _GOLF_API_KEY constant — no need to collect from UI
   }
   if (step === 4) {                           // League Format
     d.format           = document.getElementById('wz-format-val')?.value || 'match_play';
@@ -262,10 +267,30 @@ function collectScorecardGrid() {
   return scorecard;
 }
 
+function _autoTeamName(players) {
+  if (!players || !players.length) return '';
+  const lastNames = players.map(p => {
+    const parts = (p.name || '').trim().split(/\s+/);
+    return parts.length > 1 ? parts[parts.length - 1] : parts[0];
+  }).filter(n => n);
+  return lastNames.join('/');
+}
+
+// Live-update team name placeholder as player names are typed
+function _updateTeamNamePlaceholder(teamRow) {
+  if (!teamRow) return;
+  const nameInput = teamRow.querySelector('.team-name-input');
+  if (!nameInput) return;
+  const playerNames = Array.from(teamRow.querySelectorAll('.player-name-inp'))
+    .map(inp => inp.value.trim())
+    .filter(n => n);
+  const auto = _autoTeamName(playerNames.map(n => ({ name: n })));
+  nameInput.placeholder = auto || 'Team name';
+}
+
 function collectTeams() {
   const teamRows = document.querySelectorAll('.team-row');
   return Array.from(teamRows).map((row, ti) => {
-    const name = row.querySelector('.team-name-input')?.value?.trim() || `Team ${ti + 1}`;
     const playerRows = row.querySelectorAll('.player-row');
     const players = Array.from(playerRows).map((prow, pi) => {
       const nameInp = prow.querySelector('.player-name-inp');
@@ -280,6 +305,8 @@ function collectTeams() {
         seedHcp:     parseFloat(hcpInp?.dataset.preciseHcp || hcpInp?.value || '') || null
       };
     }).filter(Boolean);
+    const rawName = row.querySelector('.team-name-input')?.value?.trim();
+    const name = rawName || _autoTeamName(players) || `Team ${ti + 1}`;
     return { id: `t${ti + 1}`, name, players };
   });
 }
@@ -627,6 +654,404 @@ function applyOCRResult(result) {
   if (result.back)  renderScorecardGrid('scorecard-back-container',  'back',  result.back);
 }
 
+// ===== Golf Course API Search =====
+// Integrates with golfcourseapi.com to auto-fill scorecard data
+const _GOLF_API_KEY = 'MNKB6GU6KS4C7D7JLR3HRNG3XQ';
+let _selectedCourseData = null; // cached full course response for tee selection
+let _courseSearchTimer = null;
+
+// Debounce: fires search 350ms after user stops typing
+function _debounceCourseSearch() {
+  clearTimeout(_courseSearchTimer);
+  const query = document.getElementById('wz-course-search')?.value?.trim();
+  const resultsDiv = document.getElementById('wz-course-results');
+  if (!query || query.length < 3) {
+    if (resultsDiv) resultsDiv.innerHTML = '';
+    return;
+  }
+  _courseSearchTimer = setTimeout(() => searchGolfCourse(), 350);
+}
+
+async function searchGolfCourse() {
+  const searchText = document.getElementById('wz-course-search')?.value?.trim();
+  const resultsDiv = document.getElementById('wz-course-results');
+  if (!resultsDiv || !searchText || searchText.length < 3) return;
+
+  resultsDiv.innerHTML = '<div class="course-dropdown-item course-search-loading"><span class="spinner"></span> Searching...</div>';
+
+  try {
+    // Query both sources in parallel
+    const [apiResult, localResult] = await Promise.allSettled([
+      _searchGolfCourseAPI(searchText),
+      _searchLocalCourses(searchText)
+    ]);
+
+    // Stale-input check
+    const current = document.getElementById('wz-course-search')?.value?.trim();
+    if (current !== searchText) return;
+
+    const localCourses = localResult.status === 'fulfilled' ? localResult.value : [];
+    const apiCourses = apiResult.status === 'fulfilled' ? apiResult.value : [];
+
+    // Deduplicate: remove API results that match a local course name
+    const localNames = new Set(localCourses.map(c => (c.name || '').toLowerCase()));
+    const filteredApi = apiCourses.filter(c => !localNames.has((c.club_name || '').toLowerCase()));
+
+    if (!localCourses.length && !filteredApi.length) {
+      resultsDiv.innerHTML = '<div class="course-dropdown-item course-search-empty">No courses found</div>';
+      return;
+    }
+
+    let html = '';
+
+    // Local courses first (with star badge + green border)
+    html += localCourses.map(c => `
+      <div class="course-dropdown-item course-local" onclick="selectLocalCourse('${c.id}')">
+        <span class="course-dropdown-name">${c.name} <span class="course-badge-local">★</span></span>
+        <span class="course-dropdown-loc">${c.city || ''}${c.state ? ', ' + c.state : ''}</span>
+      </div>
+    `).join('');
+
+    // API courses
+    html += filteredApi.slice(0, 8).map(c => {
+      const name = c.club_name || 'Unknown Club';
+      const loc = [c.location?.city, c.location?.state].filter(Boolean).join(', ');
+      return `<div class="course-dropdown-item" onclick="selectGolfCourse(${c.id})">
+        <span class="course-dropdown-name">${name}</span>
+        <span class="course-dropdown-loc">${loc}</span>
+      </div>`;
+    }).join('');
+
+    resultsDiv.innerHTML = html;
+  } catch (err) {
+    console.error('[searchGolfCourse]', err);
+    resultsDiv.innerHTML = '';
+  }
+}
+
+// Search the external GolfCourseAPI
+async function _searchGolfCourseAPI(searchText) {
+  const resp = await fetch(`https://api.golfcourseapi.com/v1/search?search_query=${encodeURIComponent(searchText)}`, {
+    headers: { 'Authorization': `Key ${_GOLF_API_KEY}` }
+  });
+  if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+  const data = await resp.json();
+  return data.courses || [];
+}
+
+// Search local Firestore courses collection (client-side filter)
+async function _searchLocalCourses(searchText) {
+  try {
+    const snap = await window._FB.getDocs(window._FB.collection(window._FB.db, 'courses'));
+    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const q = searchText.toLowerCase();
+    return all.filter(c =>
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.city || '').toLowerCase().includes(q)
+    );
+  } catch (err) {
+    console.error('[_searchLocalCourses]', err);
+    return [];
+  }
+}
+
+// Select a course from the local Firestore database
+async function selectLocalCourse(courseId) {
+  const resultsDiv = document.getElementById('wz-course-results');
+  const selectedDiv = document.getElementById('wz-course-selected');
+  const teeDiv = document.getElementById('wz-tee-selector');
+  if (resultsDiv) resultsDiv.innerHTML = '';
+
+  try {
+    const snap = await window._FB.getDoc(window._FB.doc(window._FB.db, 'courses', courseId));
+    if (!snap.exists()) { toast('Course not found', 'error'); return; }
+    const course = snap.data();
+
+    // Auto-fill course info fields
+    const nameInput = document.getElementById('wz-course-name');
+    const cityInput = document.getElementById('wz-course-city');
+    const teesInput = document.getElementById('wz-tees');
+    if (nameInput) nameInput.value = course.name || '';
+    if (cityInput) cityInput.value = [course.city, course.state].filter(Boolean).join(', ');
+    if (teesInput) teesInput.value = course.tees || '';
+
+    // Update search input
+    const searchInput = document.getElementById('wz-course-search');
+    if (searchInput) searchInput.value = course.name || '';
+
+    // Show selected badge
+    if (selectedDiv) {
+      selectedDiv.style.display = 'block';
+      selectedDiv.innerHTML = `<div class="course-selected-badge">
+        <span>★ ${course.name} — ${[course.city, course.state].filter(Boolean).join(', ')}</span>
+        <button class="course-clear-btn" onclick="_clearCourseSelection()">✕</button>
+      </div>`;
+    }
+
+    // Hide tee selector (local courses store one scorecard set)
+    if (teeDiv) teeDiv.style.display = 'none';
+
+    // Fill scorecard directly from stored data
+    if (course.scorecard?.front?.length) {
+      renderScorecardGrid('scorecard-front-container', 'front', course.scorecard.front);
+    }
+    if (course.scorecard?.back?.length) {
+      renderScorecardGrid('scorecard-back-container', 'back', course.scorecard.back);
+    }
+
+    // Switch to manual tab so user can review
+    const manualTabBtn = document.querySelector('.tab-btn[data-tab="manual"]');
+    if (manualTabBtn) manualTabBtn.click();
+
+    toast(`${course.name} loaded from course database`, 'success');
+  } catch (err) {
+    console.error('[selectLocalCourse]', err);
+    toast('Failed to load course', 'error');
+  }
+}
+
+async function selectGolfCourse(courseId) {
+  const apiKey = _GOLF_API_KEY;
+  const resultsDiv = document.getElementById('wz-course-results');
+  const teeDiv = document.getElementById('wz-tee-selector');
+  const selectedDiv = document.getElementById('wz-course-selected');
+  if (!apiKey) return;
+
+  // Clear dropdown, show loading in the selected area
+  if (resultsDiv) resultsDiv.innerHTML = '';
+  const searchInput = document.getElementById('wz-course-search');
+
+  try {
+    const resp = await fetch(`https://api.golfcourseapi.com/v1/courses/${courseId}`, {
+      headers: { 'Authorization': `Key ${apiKey}` }
+    });
+    if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+
+    const data = await resp.json();
+    // API wraps response in { course: { ... } }
+    const course = data.course || data;
+    _selectedCourseData = course;
+
+    // Auto-fill course name and city
+    const nameInput = document.getElementById('wz-course-name');
+    const cityInput = document.getElementById('wz-course-city');
+    const clubName = course.club_name || '';
+    const courseName = course.course_name || '';
+    const displayName = courseName && courseName !== clubName && !courseName.match(/^Course\s*(No\.?\s*)?[0-9]*$/i)
+      ? `${clubName} - ${courseName}` : clubName;
+    if (nameInput) nameInput.value = displayName;
+    if (cityInput) {
+      const loc = course.location || {};
+      cityInput.value = [loc.city, loc.state].filter(Boolean).join(', ');
+    }
+    // Show selected course name in the search input and show a selected badge
+    if (searchInput) searchInput.value = displayName;
+    if (selectedDiv) {
+      selectedDiv.style.display = 'block';
+      selectedDiv.innerHTML = `<div class="course-selected-badge">
+        <span>✓ ${displayName} — ${[course.location?.city, course.location?.state].filter(Boolean).join(', ')}</span>
+        <button class="course-clear-btn" onclick="_clearCourseSelection()">✕</button>
+      </div>`;
+    }
+
+    // Build tee selector from male + female tees
+    const allTees = [];
+    (course.tees?.male || []).forEach((t, i) => allTees.push({ ...t, _idx: i, _group: 'male' }));
+    (course.tees?.female || []).forEach((t, i) => allTees.push({ ...t, _idx: i, _group: 'female' }));
+
+    if (!allTees.length) {
+      if (teeDiv) teeDiv.style.display = 'none';
+      toast(`${displayName} loaded — no tee data, enter scorecard manually`, 'default');
+      return;
+    }
+
+    if (teeDiv) {
+      teeDiv.style.display = 'block';
+      teeDiv.innerHTML = `
+        <label style="font-size:13px;font-weight:600;margin-bottom:4px;display:block">Select Tee Box</label>
+        <div class="tee-options">
+          ${allTees.map((t, idx) => {
+            const label = t.tee_name || 'Unknown';
+            const yards = t.total_yards ? `${t.total_yards} yds` : '';
+            const rating = t.course_rating ? `${t.course_rating}/${t.slope_rating}` : '';
+            const holes = t.number_of_holes ? `${t.number_of_holes}h` : '';
+            const info = [yards, rating, holes].filter(Boolean).join(' · ');
+            const genderTag = t._group === 'female' ? ' <span class="tee-gender">(W)</span>' : '';
+            return `<div class="tee-option-card" onclick="selectTeeBox(${idx})">
+              <span class="tee-option-name">${label}${genderTag}</span>
+              <span class="tee-option-info">${info}</span>
+            </div>`;
+          }).join('')}
+        </div>`;
+    }
+
+    toast(`${displayName} selected — now pick your tee box`, 'success');
+  } catch (err) {
+    console.error('[GolfCourseAPI course]', err);
+    resultsDiv.innerHTML = '';
+    if (teeDiv) teeDiv.style.display = 'none';
+    toast('Failed to load course details — ' + (err.message || 'check console'), 'error');
+  }
+}
+
+function selectTeeBox(teeIdx) {
+  if (!_selectedCourseData) return;
+
+  // Combine male + female tees into one flat array (same order as displayed)
+  const allTees = [
+    ...(_selectedCourseData.tees?.male || []),
+    ...(_selectedCourseData.tees?.female || [])
+  ];
+  const tee = allTees[teeIdx];
+  if (!tee || !tee.holes?.length) {
+    toast('No hole data for this tee box', 'error');
+    return;
+  }
+
+  // Fill tees input
+  const teesInput = document.getElementById('wz-tees');
+  if (teesInput) teesInput.value = tee.tee_name || '';
+
+  // Map API holes to our scorecard format
+  // API: { par, yardage, handicap } per hole (1-indexed in array)
+  // Ours: { hole, par, hdcp, yards } — front 9 (holes 1-9), back 9 (holes 10-18)
+  const holes = tee.holes || [];
+  const frontHoles = [];
+  const backHoles = [];
+
+  for (let i = 0; i < holes.length; i++) {
+    const h = holes[i];
+    const entry = {
+      hole: (i % 9) + 1,
+      par:   h.par || 4,
+      hdcp:  h.handicap || 0,
+      yards: h.yardage || 0
+    };
+    if (i < 9) frontHoles.push(entry);
+    else backHoles.push(entry);
+  }
+
+  // Render scorecard grids with the API data
+  if (frontHoles.length) renderScorecardGrid('scorecard-front-container', 'front', frontHoles);
+  if (backHoles.length)  renderScorecardGrid('scorecard-back-container',  'back',  backHoles);
+
+  // Switch to manual tab so user can review
+  const manualTabBtn = document.querySelector('.tab-btn[data-tab="manual"]');
+  if (manualTabBtn) manualTabBtn.click();
+
+  // Highlight the selected tee
+  document.querySelectorAll('.tee-option-card').forEach((el, i) => {
+    el.classList.toggle('tee-option-selected', i === teeIdx);
+  });
+
+  const yds = tee.total_yards ? ` (${tee.total_yards} yds)` : '';
+  toast(`${tee.tee_name}${yds} scorecard loaded — review below`, 'success');
+}
+
+function _clearCourseSelection() {
+  _selectedCourseData = null;
+  const searchInput = document.getElementById('wz-course-search');
+  const resultsDiv = document.getElementById('wz-course-results');
+  const teeDiv = document.getElementById('wz-tee-selector');
+  const selectedDiv = document.getElementById('wz-course-selected');
+  if (searchInput) searchInput.value = '';
+  if (resultsDiv) resultsDiv.innerHTML = '';
+  if (teeDiv) { teeDiv.style.display = 'none'; teeDiv.innerHTML = ''; }
+  if (selectedDiv) { selectedDiv.style.display = 'none'; selectedDiv.innerHTML = ''; }
+  // Don't clear course name / city / tees / scorecard — user may want to keep those
+}
+
+// Close course dropdown when clicking outside
+document.addEventListener('click', function(e) {
+  const wrap = document.querySelector('.course-search-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    const dd = document.getElementById('wz-course-results');
+    if (dd) dd.innerHTML = '';
+  }
+});
+
+// ===== Course Request Form =====
+function showCourseRequestForm() {
+  document.getElementById('course-request-modal').style.display = 'flex';
+}
+
+function closeCourseRequestModal(event) {
+  if (event && event.target !== event.currentTarget) return;
+  const modal = document.getElementById('course-request-modal');
+  if (modal) modal.style.display = 'none';
+  // Reset form
+  const nameEl = document.getElementById('cr-course-name');
+  const cityEl = document.getElementById('cr-course-city');
+  const previewEl = document.getElementById('cr-upload-preview');
+  const fileEl = document.getElementById('cr-scorecard-file');
+  if (nameEl) nameEl.value = '';
+  if (cityEl) cityEl.value = '';
+  if (previewEl) previewEl.style.display = 'none';
+  if (fileEl) fileEl.value = '';
+}
+
+// Scorecard photo preview in course request modal
+document.addEventListener('change', function(e) {
+  if (e.target.id !== 'cr-scorecard-file') return;
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = document.getElementById('cr-preview-img');
+    const preview = document.getElementById('cr-upload-preview');
+    if (img) img.src = ev.target.result;
+    if (preview) preview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+});
+
+async function submitCourseRequest() {
+  const name = document.getElementById('cr-course-name')?.value?.trim();
+  const city = document.getElementById('cr-course-city')?.value?.trim();
+  if (!name || !city) { toast('Course name and city are required', 'error'); return; }
+
+  const btn = document.getElementById('cr-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    let photoUrl = null;
+    const fileInput = document.getElementById('cr-scorecard-file');
+    const file = fileInput?.files?.[0];
+
+    if (file) {
+      // Upload to Firebase Storage
+      const sRef = window._FB.storageRef(`courseRequests/${Date.now()}_${file.name}`);
+      await window._FB.uploadBytes(sRef, file);
+      photoUrl = await window._FB.getDownloadURL(sRef);
+    }
+
+    // Write to Firestore courseRequests collection
+    const requestId = `cr_${Date.now()}`;
+    await window._FB.setDoc(
+      window._FB.doc(window._FB.db, 'courseRequests', requestId),
+      {
+        courseName: name,
+        city: city,
+        photoUrl: photoUrl,
+        requestedBy: window.CURRENT_USER?.uid || 'anonymous',
+        requestedByEmail: window.CURRENT_USER?.email || '',
+        status: 'pending',
+        createdAt: Date.now()
+      }
+    );
+
+    toast('Course request submitted! We\'ll review and add it soon.', 'success');
+    closeCourseRequestModal();
+  } catch (err) {
+    console.error('[submitCourseRequest]', err);
+    toast('Failed to submit request — ' + (err.message || 'check console'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Submit Request';
+  }
+}
+
 // ===== Teams Builder =====
 let _teamCount = 0;
 
@@ -677,7 +1102,7 @@ function addTeam(name = '') {
 function buildPlayerRow(teamIdx, playerIdx, name = '', hilo = null, hcp = '') {
   return `
     <div class="player-row">
-      <input class="player-name-inp" type="text" placeholder="Player name" value="${name}">
+      <input class="player-name-inp" type="text" placeholder="Player name" value="${name}" oninput="_updateTeamNamePlaceholder(this.closest('.team-row'))">
       <input class="player-hcp-inp" type="number" placeholder="Hcp" value="${hcp}" min="0" max="54" step="0.5" style="width:60px;text-align:center" title="Starting handicap (optional)" />
       ${hilo ? `<button class="player-hilo ${hilo.toLowerCase()}" data-hilo="${hilo}" onclick="toggleHiLo(this)">${hilo}</button>` : ''}
       <button class="btn-icon" onclick="removePlayer(this)">✕</button>
@@ -700,7 +1125,7 @@ function addPlayerToTeam(btn) {
   div.className = 'player-row';
   div.draggable = true;
   div.innerHTML = `
-    <input class="player-name-inp" type="text" placeholder="Player name">
+    <input class="player-name-inp" type="text" placeholder="Player name" oninput="_updateTeamNamePlaceholder(this.closest('.team-row'))">
     <input class="player-hcp-inp" type="number" placeholder="Hcp" min="0" max="54" step="0.5" style="width:60px;text-align:center" title="Starting handicap (optional)" />
     ${hilo ? `<button class="player-hilo ${hilo.toLowerCase()}" data-hilo="${hilo}" onclick="toggleHiLo(this)">${hilo}</button>` : ''}
     <button class="btn-icon" onclick="removePlayer(this)">✕</button>
@@ -722,9 +1147,11 @@ function addPlayerToTeam(btn) {
 
 function removePlayer(btn) {
   const row = btn.closest('.player-row');
+  const teamRow = row?.closest('.team-row');
   const playerRows = row?.closest('.player-rows');
   row?.remove();
   if (playerRows) _updateTeamDropHint(playerRows);
+  _updateTeamNamePlaceholder(teamRow);
 }
 
 function _updateTeamDropHint(playerRows) {
@@ -1161,7 +1588,7 @@ function dropOnTeam(event, teamEl) {
   div.dataset.poolId = data.id;
   div.draggable = true;
   div.innerHTML = `
-    <input class="player-name-inp" type="text" value="${data.name}" placeholder="Player name">
+    <input class="player-name-inp" type="text" value="${data.name}" placeholder="Player name" oninput="_updateTeamNamePlaceholder(this.closest('.team-row'))">
     <input class="player-hcp-inp" type="number" placeholder="Hcp" min="0" max="54" step="0.5" style="width:60px;text-align:center" title="Starting handicap (optional)" />
     ${hilo ? `<button class="player-hilo ${hilo.toLowerCase()}" data-hilo="${hilo}" onclick="toggleHiLo(this)">${hilo}</button>` : ''}
     <button class="btn-icon" onclick="returnPlayerToPool(this,'${data.id}','${data.name.replace(/'/g, "\\'")}')">↩</button>
@@ -1199,6 +1626,7 @@ function dropOnTeam(event, teamEl) {
 
   playerRows.appendChild(div);
   _updateTeamDropHint(playerRows);
+  _updateTeamNamePlaceholder(teamEl);
 }
 
 // Tap-to-add: assign a pool player to the next team with an open slot
@@ -1228,6 +1656,7 @@ function assignToNextTeam(id, name, hcp) {
 
 function returnPlayerToPool(btn, id, name) {
   const row = btn.closest('.player-row');
+  const teamRow = row?.closest('.team-row');
   const nameInp = row?.querySelector('.player-name-inp');
   const hcpInp  = row?.querySelector('.player-hcp-inp');
   const currentName = nameInp?.value?.trim() || name;
@@ -1237,6 +1666,7 @@ function returnPlayerToPool(btn, id, name) {
     _pool.push({ id, name: currentName, hcp: currentHcp });
     _renderPool();
   }
+  _updateTeamNamePlaceholder(teamRow);
 }
 
 
@@ -1715,11 +2145,16 @@ function calcHcp(rounds, config) {
   return Math.min(Math.max(hcp, 0), maxHcp);
 }
 
-// Handicap with manual adjustment applied
-function calcHcpAdj(rounds, config, playerId) {
+// Handicap with manual adjustment applied (one-week override)
+function calcHcpAdj(rounds, config, playerId, week) {
   const base = calcHcp(rounds, config);
-  const adj  = (config?.manualAdj || {})[playerId] || 0;
-  const max  = config?.handicap?.max || 18;
+  const entry = (config?.manualAdj || {})[playerId];
+  // New format: { adj, week }. Old format: plain number (treat as expired/no week)
+  let adj = 0;
+  if (entry && typeof entry === 'object' && entry.week === week) {
+    adj = entry.adj || 0;
+  }
+  const max = config?.handicap?.max || 18;
   return Math.min(Math.max(base + adj, 0), max);
 }
 
@@ -1866,7 +2301,7 @@ function calcWeeklySkins(weekNum, allMatches, config) {
       Object.keys(m.scores).forEach(pid => {
         if (!hcpStrokes[pid]) {
           const rounds = APP.rounds[pid] || [];
-          const hcp = calcHcp(rounds, config);
+          const hcp = calcHcpAdj(rounds, config, pid, weekNum);
           hcpStrokes[pid] = getHcpStrokes(hcp, holes);
         }
       });
@@ -2002,7 +2437,7 @@ function renderDashboard() {
     const oppPlayers  = oppTeam?.players || [];
     const oppHcps     = oppPlayers.map(p => {
       const rounds = APP.rounds[p.id] || [];
-      return { name: p.name, hilo: p.hilo || '', hcp: calcHcp(rounds, config) };
+      return { name: p.name, hilo: p.hilo || '', hcp: calcHcpAdj(rounds, config, p.id, nm.week) };
     });
 
     nextHtml = `
@@ -2222,18 +2657,32 @@ function renderHandicaps() {
   const config = APP.config;
   const manAdj = config.manualAdj || {};
 
-  const allPlayers = teams.flatMap(t => (t.players || []).map(p => ({ ...p, teamName: t.name })));
+  const allPlayers = teams.flatMap(t => {
+    const displayTeamName = /^Team\s*\d+$/i.test(t.name) ? _autoTeamName(t.players) || t.name : t.name;
+    return (t.players || []).map(p => ({ ...p, teamName: displayTeamName }));
+  });
+
+  // Determine the "current" week (next unplayed or most recent)
+  const schedule = config.schedule || [];
+  const today = new Date().toISOString().slice(0, 10);
+  let displayWeek = null;
+  for (const w of schedule) {
+    if (w.date && w.date >= today) { displayWeek = w.week; break; }
+  }
+  if (!displayWeek && schedule.length) displayWeek = schedule[schedule.length - 1].week;
 
   // Sort by handicap
   const sorted = allPlayers.map(player => {
     const rounds = APP.rounds[player.id] || [];
     const calc   = calcHcp(rounds, config);
-    const adj    = manAdj[player.id] || 0;
+    const entry  = manAdj[player.id];
+    const adj    = (entry && typeof entry === 'object' && entry.week === displayWeek) ? (entry.adj || 0) : 0;
+    const adjWeek = (entry && typeof entry === 'object') ? entry.week : null;
     const final  = Math.min(Math.max(calc + adj, 0), config.handicap?.max || 18);
     const grossScores = rounds.map(r => r.grossScore || r.score || 0).filter(s => s > 0);
     const lastRound   = grossScores.length ? grossScores[grossScores.length - 1] : null;
     const trend = grossScores.length >= 2 ? grossScores[grossScores.length - 1] - grossScores[grossScores.length - 2] : 0;
-    return { ...player, rounds: rounds.length, calc, adj, final, lastRound, trend };
+    return { ...player, rounds: rounds.length, calc, adj, adjWeek, final, lastRound, trend };
   }).sort((a, b) => a.final - b.final);
 
   const cards = sorted.map((p, i) => `
@@ -2241,9 +2690,10 @@ function renderHandicaps() {
       <div class="hcp-rank">${i + 1}</div>
       <div class="player-name">${p.name}</div>
       <div class="hcp-team-name">${p.teamName}</div>
-      <div class="hcp-value">${p.final.toFixed(1)}</div>
+      <div class="hcp-value">${Math.round(p.final)}</div>
+      <div class="hcp-actual">${p.final.toFixed(1)} actual</div>
       <div class="hcp-label">Handicap</div>
-      ${p.adj ? `<div class="hcp-adj">${p.adj > 0 ? '+' : ''}${p.adj} adj</div>` : ''}
+      ${p.adjWeek ? `<div class="hcp-adj">${p.adj > 0 ? '+' : ''}${p.adj} adj (W${p.adjWeek})</div>` : ''}
       <div class="hcp-detail">
         <span>${p.rounds} rd${p.rounds !== 1 ? 's' : ''}</span>
         ${p.lastRound ? `<span>Last: ${p.lastRound}</span>` : ''}
@@ -2258,12 +2708,199 @@ function renderHandicaps() {
     ? `<div class="hcp-formula-banner">WHS Formula · Rating ${config.course.rating} · Slope ${config.course.slope}</div>`
     : `<div class="hcp-formula-banner">League Formula · Par ${par}</div>`;
 
+  // Build handicap calculator (player dropdown + breakdown)
+  const calcHtml = `
+    <div class="hcp-calculator">
+      <div class="hcp-calc-title">Handicap Calculator</div>
+      <div class="hcp-calc-select">
+        <label class="field-hint" style="display:block;margin-bottom:6px;">Select a player to see their handicap breakdown:</label>
+        <select id="hcp-calc-player" class="hcp-calc-dropdown"></select>
+      </div>
+      <div id="hcp-calc-result"></div>
+    </div>
+  `;
+
   el.innerHTML = `
     <div class="mt-12">
       ${formulaBanner}
       <div class="hcp-grid">${cards || '<div class="empty-state"><p>No players yet</p></div>'}</div>
+      ${calcHtml}
     </div>
   `;
+
+  // Wire up the calculator dropdown
+  _renderHcpCalc(sorted, config, displayWeek);
+}
+
+// Handicap calculator — player dropdown + step-by-step breakdown
+function _renderHcpCalc(sortedPlayers, config, displayWeek) {
+  const select   = document.getElementById('hcp-calc-player');
+  const resultEl = document.getElementById('hcp-calc-result');
+  if (!select || !resultEl) return;
+
+  const teams = config.teams || [];
+  const allP  = teams.flatMap(t => {
+    const displayTeamName = /^Team\s*\d+$/i.test(t.name) ? _autoTeamName(t.players) || t.name : t.name;
+    return (t.players || []).map(p => ({ ...p, teamName: displayTeamName }));
+  });
+
+  // Populate dropdown
+  select.innerHTML = '<option value="">-- Choose Player --</option>' +
+    allP.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+
+  select.onchange = () => {
+    const pid = select.value;
+    if (!pid) { resultEl.innerHTML = ''; return; }
+
+    const player = allP.find(p => p.id === pid);
+    if (!player) return;
+
+    const hcpConfig = config.handicap || {};
+    const numRounds = hcpConfig.rounds || 5;
+    const factor    = hcpConfig.factor ?? 0.9;
+    const maxHcp    = hcpConfig.max ?? 18;
+    const drop      = hcpConfig.drop || 'none';
+    const par       = config?.course?.scorecard?.front?.reduce((a, h) => a + h.par, 0) || 35;
+    const slope     = config?.course?.slope;
+    const rating    = config?.course?.rating;
+    const useWHS    = slope > 0 && rating > 0;
+    const rating9   = useWHS ? rating / 2 : null;
+    const manAdj    = config.manualAdj || {};
+
+    // Get all rounds for this player
+    const rounds = APP.rounds[pid] || [];
+    const grossScores = rounds.map(r => r.grossScore || r.score || 0).filter(s => s > 0);
+
+    // Manual adj for current week
+    const entry = manAdj[pid];
+    const adj = (entry && typeof entry === 'object' && entry.week === displayWeek) ? (entry.adj || 0) : 0;
+
+    // calcHcp result
+    const calcVal = calcHcp(rounds, config);
+    const finalVal = Math.min(Math.max(calcVal + adj, 0), maxHcp);
+
+    let html = '<div class="hcp-calc-breakdown">';
+
+    if (grossScores.length === 0) {
+      // No rounds
+      html += '<div class="hcp-calc-section"><div class="hcp-calc-label">No Rounds</div>';
+      html += '<div class="hcp-calc-steps">';
+      html += '<div class="hcp-calc-row" style="color:var(--mt);"><span class="hcp-calc-desc">No rounds recorded for this player.</span><span class="hcp-calc-val"></span></div>';
+      html += '</div></div>';
+    } else {
+      // Show rolling scores — highlight the ones used in calc
+      const recent = rounds.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+      const usedRounds = recent.slice(0, numRounds).filter(r => (r.grossScore || r.score || 0) > 0);
+      const displayRounds = recent.slice(0, Math.min(recent.length, 10)).filter(r => (r.grossScore || r.score || 0) > 0);
+
+      const usedSet = new Set(usedRounds.map(r => r.date + '_' + (r.grossScore || r.score)));
+
+      html += `<div class="hcp-calc-section"><div class="hcp-calc-label">Recent Rounds (${grossScores.length} total)</div>`;
+      html += '<div class="hcp-calc-rounds">';
+      displayRounds.reverse().forEach((r, i) => {
+        const gross = r.grossScore || r.score || 0;
+        const key = r.date + '_' + gross;
+        const used = usedSet.has(key);
+        const diff = useWHS ? ((113 / slope) * (gross - rating9)).toFixed(1) : (gross - par);
+        const weekLabel = r.week ? `W${r.week}` : (r.date || `R${i + 1}`);
+        html += `<div class="hcp-round-chip ${used ? 'used' : 'old'}">
+          <span class="hcp-round-label">${weekLabel}</span>
+          <span class="hcp-round-score">${gross}</span>
+          <span class="hcp-round-diff">${useWHS ? diff : (diff >= 0 ? '+' : '') + diff}</span>
+        </div>`;
+      });
+      html += '</div></div>';
+
+      // Step-by-step calculation
+      const usedGross = usedRounds.map(r => r.grossScore || r.score || 0).filter(s => s > 0);
+
+      // Convert to values (WHS differentials or raw scores)
+      let values = usedGross.map(gross => useWHS ? (113 / slope) * (gross - rating9) : gross);
+
+      // Drop step
+      let dropped = [];
+      let filtered = values.slice();
+      if (drop !== 'none' && filtered.length > 2) {
+        const sorted = filtered.map((v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
+        if (drop === 'low' || drop === 'both') {
+          dropped.push(sorted[0]);
+          sorted.splice(0, 1);
+        }
+        if (drop === 'high' || drop === 'both') {
+          dropped.push(sorted[sorted.length - 1]);
+          sorted.splice(sorted.length - 1, 1);
+        }
+        filtered = sorted.map(s => s.v);
+      }
+
+      const avg = filtered.length > 0 ? filtered.reduce((a, b) => a + b, 0) / filtered.length : 0;
+
+      html += '<div class="hcp-calc-section"><div class="hcp-calc-label">Step-by-Step Calculation</div>';
+      html += '<div class="hcp-calc-steps">';
+
+      html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">Last ${usedGross.length} scores:</span><span class="hcp-calc-val">${usedGross.join(', ')}</span></div>`;
+
+      if (useWHS) {
+        html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">Differentials (113/slope &times; (score &minus; rating/2)):</span><span class="hcp-calc-val">${values.map(v => v.toFixed(1)).join(', ')}</span></div>`;
+      }
+
+      if (drop !== 'none' && dropped.length > 0) {
+        html += `<div class="hcp-calc-row dropped"><span class="hcp-calc-desc">Drop ${drop}:</span><span class="hcp-calc-val">${dropped.map(d => d.v.toFixed(1)).join(', ')} removed</span></div>`;
+      }
+
+      if (useWHS) {
+        html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">Average differential:</span><span class="hcp-calc-val">${avg.toFixed(1)}</span></div>`;
+        html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">&times; ${(factor * 100).toFixed(0)}% factor:</span><span class="hcp-calc-val">${(avg * factor).toFixed(1)}</span></div>`;
+      } else {
+        html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">Average score:</span><span class="hcp-calc-val">${avg.toFixed(1)}</span></div>`;
+        html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">Avg &minus; Par (${par}):</span><span class="hcp-calc-val">${(avg - par).toFixed(1)}</span></div>`;
+        html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">&times; ${(factor * 100).toFixed(0)}% factor:</span><span class="hcp-calc-val">${((avg - par) * factor).toFixed(1)}</span></div>`;
+      }
+
+      html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">Calculated handicap:</span><span class="hcp-calc-val">${calcVal.toFixed(1)}</span></div>`;
+    }
+
+    if (adj !== 0) {
+      html += `<div class="hcp-calc-row"><span class="hcp-calc-desc">Commissioner adjustment (W${displayWeek}):</span><span class="hcp-calc-val">${adj > 0 ? '+' : ''}${adj}</span></div>`;
+    }
+
+    html += `<div class="hcp-calc-row final"><span class="hcp-calc-desc">Final Handicap:</span><span class="hcp-calc-val hcp-final-big">${finalVal.toFixed(1)}</span></div>`;
+    html += '</div></div>';
+
+    // Stroke distribution
+    const weekNines = config.weekNines || {};
+    const latestWeek = Object.keys(weekNines).sort((a, b) => parseInt(b) - parseInt(a))[0];
+    const nine = weekNines[latestWeek] || 'front';
+    const sc = config?.course?.scorecard?.[nine];
+    if (sc && finalVal > 0) {
+      const strokes = _getHcpStrokes(Math.round(finalVal), sc);
+      html += `<div class="hcp-calc-section"><div class="hcp-calc-label">Stroke Distribution (${nine === 'front' ? 'Front' : 'Back'} 9)</div>`;
+      html += '<div class="hcp-stroke-grid">';
+      html += '<div class="hcp-stroke-header">Hole</div>';
+      for (let i = 0; i < sc.length; i++) html += `<div class="hcp-stroke-header">${i + 1}</div>`;
+      html += '<div class="hcp-stroke-cell label">Hdcp</div>';
+      for (let i = 0; i < sc.length; i++) html += `<div class="hcp-stroke-cell">${sc[i].hdcp}</div>`;
+      html += '<div class="hcp-stroke-cell label">Par</div>';
+      for (let i = 0; i < sc.length; i++) html += `<div class="hcp-stroke-cell">${sc[i].par}</div>`;
+      html += '<div class="hcp-stroke-cell label strokes">Strokes</div>';
+      for (let i = 0; i < sc.length; i++) html += `<div class="hcp-stroke-cell strokes ${strokes[i] > 0 ? 'has-stroke' : ''}">${strokes[i] > 0 ? strokes[i] : '&mdash;'}</div>`;
+      html += '</div></div>';
+    }
+
+    html += '</div>';
+    resultEl.innerHTML = html;
+  };
+}
+
+// Helper: distribute handicap strokes across 9 holes by difficulty (lowest hdcp = hardest)
+function _getHcpStrokes(hcp, scorecard) {
+  const strokes = new Array(scorecard.length).fill(0);
+  if (hcp <= 0) return strokes;
+  const order = scorecard.map((h, i) => ({ i, hdcp: h.hdcp })).sort((a, b) => a.hdcp - b.hdcp);
+  for (let s = 0; s < hcp; s++) {
+    strokes[order[s % scorecard.length].i]++;
+  }
+  return strokes;
 }
 
 // ---- Schedule Tab ----
@@ -2287,6 +2924,14 @@ function renderSchedule() {
   for (const w of schedule) {
     if (w.date && w.date >= today) { currentWeekNum = w.week; break; }
   }
+
+  // Jump bar + collapse buttons for schedule
+  const jumpBar = currentWeekNum ? `
+    <div class="schedule-jump-bar">
+      <button class="schedule-jump-btn" onclick="document.getElementById('sched-week-${currentWeekNum}')?.scrollIntoView({behavior:'smooth',block:'start'})">↓ Jump to Week ${currentWeekNum}</button>
+      <button class="schedule-jump-btn" onclick="togglePastWeeks()" id="sched-collapse-btn">Hide past weeks</button>
+    </div>
+  ` : '';
 
   // Render regular schedule weeks
   const regularHtml = schedule.map(week => {
@@ -2322,8 +2967,8 @@ function renderSchedule() {
     }
 
     return `
-      <div class="schedule-week-card ${isCurrent ? 'schedule-current' : ''} ${isCancelled ? 'schedule-cancelled' : ''} ${isPast && !isCurrent ? 'schedule-past' : ''}">
-        <div class="schedule-week-header">
+      <div class="schedule-week-card ${isCurrent ? 'schedule-current' : ''} ${isCancelled ? 'schedule-cancelled' : ''} ${isPast && !isCurrent ? 'schedule-past collapsed-week' : ''}" id="sched-week-${week.week}">
+        <div class="schedule-week-header" onclick="this.parentElement.classList.toggle('collapsed-week')" style="cursor:pointer">
           <div class="schedule-header-left">
             <span class="schedule-week-label">Week ${week.week}${isPlayoff ? ' — Playoffs' : ''}</span>
             ${statusChip}
@@ -2333,6 +2978,7 @@ function renderSchedule() {
             <span class="chip chip-nine">${(week.nine || 'front') === 'front' ? 'Front' : 'Back'} 9</span>
           </div>
         </div>
+        <div class="schedule-matchups">
         ${matchupList.map(([t1id, t2id], mi) => {
           const t1 = (APP.config.teams || []).find(t => t.id === t1id);
           const t2 = (APP.config.teams || []).find(t => t.id === t2id);
@@ -2350,6 +2996,7 @@ function renderSchedule() {
             </div>
           `;
         }).join('')}
+        </div>
       </div>
     `;
   }).join('');
@@ -2398,8 +3045,17 @@ function renderSchedule() {
     `;
   }).join('');
 
-  el.innerHTML = regularHtml + customHtml + _renderPlayoffBracket();
+  el.innerHTML = jumpBar + regularHtml + customHtml + _renderPlayoffBracket();
 }
+
+function togglePastWeeks() {
+  const pastWeeks = document.querySelectorAll('.schedule-week-card.schedule-past');
+  const btn = document.getElementById('sched-collapse-btn');
+  const allHidden = pastWeeks.length > 0 && pastWeeks[0].style.display === 'none';
+  pastWeeks.forEach(w => { w.style.display = allHidden ? '' : 'none'; });
+  if (btn) btn.textContent = allHidden ? 'Hide past weeks' : 'Show past weeks';
+}
+window.togglePastWeeks = togglePastWeeks;
 
 // ---- Playoff Bracket ----
 function _renderPlayoffBracket() {
@@ -3021,13 +3677,13 @@ function renderStats() {
       sortDir === 'desc' ? valFn(b) - valFn(a) : valFn(a) - valFn(b)
     ).slice(0, 5);
 
-    const rows = sorted.map((p, i) => `
+    const rows = sorted.length ? sorted.map((p, i) => `
       <div class="stat-row">
         <span class="rank">${i + 1}</span>
         <span class="name">${p.name}</span>
         <span class="val">${fmtFn(p)}</span>
       </div>
-    `).join('');
+    `).join('') : `<div style="padding:16px;text-align:center;color:var(--mt);font-size:12px">No data yet</div>`;
 
     return `
       <div class="card stats-card">
@@ -3139,7 +3795,7 @@ async function adminForceApprove(matchKey) {
   const t2 = teams.find(t => t.id === match.team2Id);
   if (!t1 || !t2) { toast('Teams not found', 'error'); return; }
 
-  const hcp = (p) => p ? calcHcp(APP.rounds[p.id] || [], config) : 0;
+  const hcp = (p) => p ? calcHcpAdj(APP.rounds[p.id] || [], config, p.id, match.week) : 0;
   const [p1hi, p1lo] = _splitHiLo(t1, hcp);
   const [p2hi, p2lo] = _splitHiLo(t2, hcp);
 
@@ -3292,6 +3948,13 @@ window.adminRemovePlayer = adminRemovePlayer;
 window.adminSaveTeams    = adminSaveTeams;
 
 // ---- Admin Settings Tab ----
+function toggleAdminSection(sectionId) {
+  const section = document.getElementById(sectionId);
+  if (!section) return;
+  section.classList.toggle('collapsed');
+}
+window.toggleAdminSection = toggleAdminSection;
+
 function renderAdminSettings() {
   const el = document.getElementById('tab-admin-settings');
   if (!el || !APP.config || APP.member?.role !== 'commissioner') return;
@@ -3337,17 +4000,25 @@ function renderAdminSettings() {
 
   // Build handicap adjustments table
   const allPlayers = teams.flatMap(t => (t.players || []).map(p => ({ ...p, teamName: t.name })));
+  const totalWeeks = schedule.length || 18;
+  const weekOpts = Array.from({length: totalWeeks}, (_, i) => i + 1);
   const hcpAdjRows = allPlayers.map(p => {
     const rounds = APP.rounds[p.id] || [];
     const calc = calcHcp(rounds, c);
-    const adj = manAdj[p.id] || 0;
+    const entry = manAdj[p.id];
+    const adj = (entry && typeof entry === 'object') ? entry.adj : 0;
+    const adjWeek = (entry && typeof entry === 'object') ? entry.week : '';
     const final = Math.min(Math.max(calc + adj, 0), hcpConfig.max || 18);
     return `
       <tr>
         <td class="hcpadj-name">${p.name}</td>
         <td class="hcpadj-calc">${calc.toFixed(1)}</td>
         <td class="hcpadj-adj">
-          <input type="number" class="field field-sm hcpadj-input" value="${adj}" step="0.5" min="-18" max="18" data-pid="${p.id}" onchange="adminSetHcpAdj('${p.id}', this.value)" />
+          <select class="field field-sm hcpadj-week" data-pid="${p.id}" onchange="adminSetHcpAdj('${p.id}')">
+            <option value="">—</option>
+            ${weekOpts.map(w => `<option value="${w}" ${w === adjWeek ? 'selected' : ''}>W${w}</option>`).join('')}
+          </select>
+          <input type="number" class="field field-sm hcpadj-input" value="${adj || ''}" step="0.5" min="-18" max="18" data-pid="${p.id}" onchange="adminSetHcpAdj('${p.id}')" placeholder="±" />
         </td>
         <td class="hcpadj-final">${final.toFixed(1)}</td>
       </tr>`;
@@ -3355,308 +4026,422 @@ function renderAdminSettings() {
 
   el.innerHTML = `
     <div class="mt-12">
-      <!-- League Info -->
-      <div class="admin-section">
-        <div class="admin-section-title">League Info</div>
-        <div class="settings-row">
-          <label>League Name</label>
-          <input class="field" id="as-league-name" value="${c.leagueName || ''}" />
-        </div>
-        <div class="settings-row">
-          <label>Season Year</label>
-          <input class="field" type="number" id="as-season-year" value="${c.seasonYear || new Date().getFullYear()}" min="2020" max="2040" />
-        </div>
-        <div class="settings-row">
-          <label>Day of Week</label>
-          <select class="field" id="as-day-of-week">
-            ${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d =>
-              `<option value="${d}" ${(c.dayOfWeek || '') === d ? 'selected' : ''}>${d}</option>`
-            ).join('')}
-          </select>
-        </div>
-        <div class="settings-row">
-          <label>Start Tee Time</label>
-          <input class="field" type="time" id="as-tee-time" value="${c.startTeeTime || c.teeTime || ''}" />
-        </div>
-        <div class="settings-row">
-          <label>Tee Interval (min)</label>
-          <input class="field" type="number" id="as-tee-interval" value="${c.teeInterval || 10}" min="5" max="30" step="1" />
-        </div>
-      </div>
 
-      <!-- Season Dates -->
-      <div class="admin-section">
-        <div class="admin-section-title">Season Dates & Nines</div>
-        <p class="admin-help-text">Set dates, front/back 9, handicap inclusion, and cancel weeks.</p>
-        <div class="season-dates-grid">
-          <div class="season-date-row sd-header">
-            <span class="sd-week">Wk</span>
-            <span class="sd-date-input">Date</span>
-            <span class="sd-nine-toggle">9</span>
-            <span class="sd-hcp-label">HCP</span>
-            <span class="btn-xs" style="visibility:hidden">X</span>
-            <span class="btn-playoff-week" style="visibility:hidden">PO</span>
-          </div>
-          ${seasonDatesRows}
+      <!-- ═══ GROUP 1: League Setup ═══ -->
+      <div class="admin-group-label">League Setup</div>
+
+      <!-- League Info (expanded by default) -->
+      <div class="admin-section" id="as-sec-league-info">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-league-info')">
+          <span>League Info</span>
+          <span class="admin-chevron"></span>
         </div>
-        <div class="admin-save-bar" style="position:static;background:none;padding:10px 0">
-          <button class="btn btn-green btn-sm" onclick="adminSaveSeasonDates()">Save Season Dates</button>
+        <div class="admin-section-body">
+          <div class="settings-row">
+            <label>League Name</label>
+            <input class="field" id="as-league-name" value="${c.leagueName || ''}" />
+          </div>
+          <div class="settings-row">
+            <label>Season Year</label>
+            <input class="field" type="number" id="as-season-year" value="${c.seasonYear || new Date().getFullYear()}" min="2020" max="2040" />
+          </div>
+          <div class="settings-row">
+            <label>Day of Week</label>
+            <select class="field" id="as-day-of-week">
+              ${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d =>
+                `<option value="${d}" ${(c.dayOfWeek || '') === d ? 'selected' : ''}>${d}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="settings-row">
+            <label>Start Tee Time</label>
+            <input class="field" type="time" id="as-tee-time" value="${c.startTeeTime || c.teeTime || ''}" />
+          </div>
+          <div class="settings-row">
+            <label>Tee Interval (min)</label>
+            <input class="field" type="number" id="as-tee-interval" value="${c.teeInterval || 10}" min="5" max="30" step="1" />
+          </div>
         </div>
       </div>
 
       <!-- Course -->
-      <div class="admin-section">
-        <div class="admin-section-title">Course</div>
-        <div class="settings-row">
-          <label>Course Name</label>
-          <input class="field" id="as-course-name" value="${c.course?.name || ''}" />
+      <div class="admin-section collapsed" id="as-sec-course">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-course')">
+          <span>Course</span>
+          <span class="admin-chevron"></span>
         </div>
-        <div class="settings-row">
-          <label>Location</label>
-          <input class="field" id="as-course-location" value="${c.course?.location || ''}" />
+        <div class="admin-section-body">
+          <div class="settings-row">
+            <label>Course Name</label>
+            <input class="field" id="as-course-name" value="${c.course?.name || ''}" />
+          </div>
+          <div class="settings-row">
+            <label>Location</label>
+            <input class="field" id="as-course-location" value="${c.course?.location || ''}" />
+          </div>
+          <div class="settings-row">
+            <label>Tees</label>
+            <input class="field" id="as-course-tees" value="${c.course?.tees || ''}" />
+          </div>
+          <div class="settings-row">
+            <label>Course Rating (18-hole)</label>
+            <input class="field" type="number" id="as-course-rating" value="${c.course?.rating || ''}" min="55" max="80" step="0.1" placeholder="e.g. 70.7" />
+          </div>
+          <div class="settings-row">
+            <label>Slope Rating</label>
+            <input class="field" type="number" id="as-course-slope" value="${c.course?.slope || ''}" min="55" max="155" step="1" placeholder="e.g. 125" />
+          </div>
+          <p class="admin-help-text">Optional: When both are set, handicaps use the WHS differential formula. Leave empty for the default league formula.</p>
         </div>
-        <div class="settings-row">
-          <label>Tees</label>
-          <input class="field" id="as-course-tees" value="${c.course?.tees || ''}" />
-        </div>
-        <div class="settings-row">
-          <label>Course Rating (18-hole)</label>
-          <input class="field" type="number" id="as-course-rating" value="${c.course?.rating || ''}" min="55" max="80" step="0.1" placeholder="e.g. 70.7" />
-        </div>
-        <div class="settings-row">
-          <label>Slope Rating</label>
-          <input class="field" type="number" id="as-course-slope" value="${c.course?.slope || ''}" min="55" max="155" step="1" placeholder="e.g. 125" />
-        </div>
-        <p class="admin-help-text">Optional: When both are set, handicaps use the WHS differential formula. Leave empty for the default league formula.</p>
       </div>
 
+      <!-- Season Schedule -->
+      <div class="admin-section collapsed" id="as-sec-schedule">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-schedule')">
+          <span>Season Schedule</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Set dates, front/back 9, handicap inclusion, and cancel weeks.</p>
+          <div class="season-dates-grid">
+            <div class="season-date-row sd-header">
+              <span class="sd-week">Wk</span>
+              <span class="sd-date-input">Date</span>
+              <span class="sd-nine-toggle">9</span>
+              <span class="sd-hcp-label">HCP</span>
+              <span class="btn-xs" style="visibility:hidden">X</span>
+              <span class="btn-playoff-week" style="visibility:hidden">PO</span>
+            </div>
+            ${seasonDatesRows}
+          </div>
+          <div style="padding:10px 0">
+            <button class="btn btn-green btn-sm" onclick="adminSaveSeasonDates()">Save Season Dates</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ GROUP 2: Scoring & Handicaps ═══ -->
+      <div class="admin-group-label">Scoring & Handicaps</div>
+
       <!-- Scoring Format -->
-      <div class="admin-section">
-        <div class="admin-section-title">Scoring Format</div>
-        <div class="settings-row">
-          <label>Format</label>
-          <input class="field" id="as-format-type" value="${fmtConfig.type || 'match_play'}" readonly />
+      <div class="admin-section collapsed" id="as-sec-scoring">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-scoring')">
+          <span>Scoring Format</span>
+          <span class="admin-chevron"></span>
         </div>
-        <div class="settings-row">
-          <label>Points per Hole Win</label>
-          <input class="field" type="number" id="as-pv-hole" value="${pv.hole ?? 1}" min="0" step="0.5" />
-        </div>
-        <div class="settings-row">
-          <label>Low Net Bonus</label>
-          <input class="field" type="number" id="as-pv-lownet" value="${pv.lowNet ?? 1}" min="0" step="0.5" />
-        </div>
-        <div class="settings-row">
-          <label>Team Net Bonus</label>
-          <input class="field" type="number" id="as-pv-teamnet" value="${pv.teamNet ?? 0}" min="0" step="0.5" />
-        </div>
-        <div class="settings-row">
-          <label>Birdie Bonus</label>
-          <input class="field" type="number" id="as-pv-birdie" value="${pv.birdie ?? 0}" min="0" step="0.5" />
-        </div>
-        <div class="settings-row">
-          <label>Eagle Bonus</label>
-          <input class="field" type="number" id="as-pv-eagle" value="${pv.eagle ?? 0}" min="0" step="0.5" />
-        </div>
-        <div class="settings-row">
-          <label>Missing Player Rule</label>
-          <select class="field" id="as-absent-rule">
-            ${['blind_avg','last_score','worst_score','fixed_score','forfeit','half_pts','plays_both'].map(r =>
-              `<option value="${r}" ${_getAbsentRule(APP.config) === r ? 'selected' : ''}>${r.replace(/_/g, ' ')}</option>`
-            ).join('')}
-          </select>
-        </div>
-        <div class="settings-row" id="as-absent-fixed-row" style="display:${_getAbsentRule(APP.config) === 'fixed_score' ? '' : 'none'}">
-          <label>Fixed Score</label>
-          <input class="field" type="number" id="as-absent-fixed" value="${fmtConfig.absentFixedScore || 50}" min="30" max="80" />
+        <div class="admin-section-body">
+          <div class="settings-row">
+            <label>Format</label>
+            <input class="field" id="as-format-type" value="${fmtConfig.type || 'match_play'}" readonly />
+          </div>
+          <div class="settings-row">
+            <label>Points per Hole Win</label>
+            <input class="field" type="number" id="as-pv-hole" value="${pv.hole ?? 1}" min="0" step="0.5" />
+          </div>
+          <div class="settings-row">
+            <label>Low Net Bonus</label>
+            <input class="field" type="number" id="as-pv-lownet" value="${pv.lowNet ?? 1}" min="0" step="0.5" />
+          </div>
+          <div class="settings-row">
+            <label>Team Net Bonus</label>
+            <input class="field" type="number" id="as-pv-teamnet" value="${pv.teamNet ?? 0}" min="0" step="0.5" />
+          </div>
+          <div class="settings-row">
+            <label>Birdie Bonus</label>
+            <input class="field" type="number" id="as-pv-birdie" value="${pv.birdie ?? 0}" min="0" step="0.5" />
+          </div>
+          <div class="settings-row">
+            <label>Eagle Bonus</label>
+            <input class="field" type="number" id="as-pv-eagle" value="${pv.eagle ?? 0}" min="0" step="0.5" />
+          </div>
+          <div class="settings-row">
+            <label>Missing Player Rule</label>
+            <select class="field" id="as-absent-rule">
+              ${['blind_avg','last_score','worst_score','fixed_score','forfeit','half_pts','plays_both'].map(r =>
+                `<option value="${r}" ${_getAbsentRule(APP.config) === r ? 'selected' : ''}>${r.replace(/_/g, ' ')}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="settings-row" id="as-absent-fixed-row" style="display:${_getAbsentRule(APP.config) === 'fixed_score' ? '' : 'none'}">
+            <label>Fixed Score</label>
+            <input class="field" type="number" id="as-absent-fixed" value="${fmtConfig.absentFixedScore || 50}" min="30" max="80" />
+          </div>
         </div>
       </div>
 
       <!-- Handicap System -->
-      <div class="admin-section">
-        <div class="admin-section-title">Handicap System</div>
-        <div class="settings-row">
-          <label>Handicap System</label>
-          <div class="toggle-group" id="as-tg-hcpsys">
-            <button type="button" class="toggle-btn ${sysType === 'custom' ? 'active' : ''}" data-value="custom">Custom Rolling</button>
-            <button type="button" class="toggle-btn ${sysType === 'whs' ? 'active' : ''}" data-value="whs">WHS</button>
-            <button type="button" class="toggle-btn ${sysType === 'manual' ? 'active' : ''}" data-value="manual">Manual</button>
-            <button type="button" class="toggle-btn ${sysType === 'scratch' ? 'active' : ''}" data-value="scratch">Scratch</button>
-          </div>
-          <input type="hidden" id="as-hcp-type" value="${sysType}" />
+      <div class="admin-section collapsed" id="as-sec-hcp-system">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-hcp-system')">
+          <span>Handicap System</span>
+          <span class="admin-chevron"></span>
         </div>
-        <div id="as-hcp-custom-settings" style="display:${['scratch','manual'].includes(sysType) ? 'none' : ''}">
+        <div class="admin-section-body">
           <div class="settings-row">
-            <label>Rounds Used to Calculate</label>
-            <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
-              <input type="range" id="as-hcp-rounds" min="1" max="20" value="${hcpConfig.rounds ?? 5}" style="flex:1"
-                oninput="document.getElementById('as-hcp-rounds-display').textContent=this.value" />
-              <span id="as-hcp-rounds-display" style="font-size:18px;font-weight:700;color:var(--ac);min-width:28px">${hcpConfig.rounds ?? 5}</span>
+            <label>Handicap System</label>
+            <div class="toggle-group" id="as-tg-hcpsys">
+              <button type="button" class="toggle-btn ${sysType === 'custom' ? 'active' : ''}" data-value="custom">Custom Rolling</button>
+              <button type="button" class="toggle-btn ${sysType === 'whs' ? 'active' : ''}" data-value="whs">WHS</button>
+              <button type="button" class="toggle-btn ${sysType === 'manual' ? 'active' : ''}" data-value="manual">Manual</button>
+              <button type="button" class="toggle-btn ${sysType === 'scratch' ? 'active' : ''}" data-value="scratch">Scratch</button>
             </div>
+            <input type="hidden" id="as-hcp-type" value="${sysType}" />
           </div>
-          <div class="settings-row">
-            <label>Drop Scores</label>
-            <div class="toggle-group" id="as-tg-hcpdrop">
-              <button type="button" class="toggle-btn ${dropVal === 'none' ? 'active' : ''}" data-value="none">None</button>
-              <button type="button" class="toggle-btn ${dropVal === 'low' ? 'active' : ''}" data-value="low">Drop Lowest</button>
-              <button type="button" class="toggle-btn ${dropVal === 'high' ? 'active' : ''}" data-value="high">Drop Highest</button>
-              <button type="button" class="toggle-btn ${dropVal === 'both' ? 'active' : ''}" data-value="both">Drop Both</button>
-            </div>
-            <input type="hidden" id="as-hcp-drop" value="${dropVal}" />
-          </div>
-          <div class="settings-row-pair">
+          <div id="as-hcp-custom-settings" style="display:${['scratch','manual'].includes(sysType) ? 'none' : ''}">
             <div class="settings-row">
-              <label>Reduction Factor</label>
-              <input class="field" type="number" id="as-hcp-factor" value="${hcpConfig.factor ?? 0.9}" min="0.5" max="1" step="0.05" />
-              <p class="admin-help-text" style="margin-top:2px">0.9 = 90% of index</p>
+              <label>Rounds Used to Calculate</label>
+              <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
+                <input type="range" id="as-hcp-rounds" min="1" max="20" value="${hcpConfig.rounds ?? 5}" style="flex:1"
+                  oninput="document.getElementById('as-hcp-rounds-display').textContent=this.value" />
+                <span id="as-hcp-rounds-display" style="font-size:18px;font-weight:700;color:var(--ac);min-width:28px">${hcpConfig.rounds ?? 5}</span>
+              </div>
             </div>
             <div class="settings-row">
-              <label>Max Handicap</label>
-              <input class="field" type="number" id="as-hcp-max" value="${hcpConfig.max ?? 18}" min="1" max="54" />
+              <label>Drop Scores</label>
+              <div class="toggle-group" id="as-tg-hcpdrop">
+                <button type="button" class="toggle-btn ${dropVal === 'none' ? 'active' : ''}" data-value="none">None</button>
+                <button type="button" class="toggle-btn ${dropVal === 'low' ? 'active' : ''}" data-value="low">Drop Lowest</button>
+                <button type="button" class="toggle-btn ${dropVal === 'high' ? 'active' : ''}" data-value="high">Drop Highest</button>
+                <button type="button" class="toggle-btn ${dropVal === 'both' ? 'active' : ''}" data-value="both">Drop Both</button>
+              </div>
+              <input type="hidden" id="as-hcp-drop" value="${dropVal}" />
+            </div>
+            <div class="settings-row-pair">
+              <div class="settings-row">
+                <label>Reduction Factor</label>
+                <input class="field" type="number" id="as-hcp-factor" value="${hcpConfig.factor ?? 0.9}" min="0.5" max="1" step="0.05" />
+                <p class="admin-help-text" style="margin-top:2px">0.9 = 90% of index</p>
+              </div>
+              <div class="settings-row">
+                <label>Max Handicap</label>
+                <input class="field" type="number" id="as-hcp-max" value="${hcpConfig.max ?? 18}" min="1" max="54" />
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Handicap Adjustments -->
-      <div class="admin-section">
-        <div class="admin-section-title">Handicap Adjustments</div>
-        <p class="admin-help-text">Manual adjustments add/subtract from calculated handicap.</p>
-        <div class="score-table-wrap">
-          <table class="hcpadj-table">
-            <thead><tr><th>Player</th><th>Calc</th><th>Adj</th><th>Final</th></tr></thead>
-            <tbody>${hcpAdjRows}</tbody>
-          </table>
+      <div class="admin-section collapsed" id="as-sec-hcp-adj">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-hcp-adj')">
+          <span>Handicap Adjustments</span>
+          <span class="admin-chevron"></span>
         </div>
-      </div>
-
-      <!-- Absent Player Overrides -->
-      <div class="admin-section">
-        <div class="admin-section-title">Mark Players Absent</div>
-        <p class="admin-help-text">Mark a player absent for a specific week. Their score will be generated using the Missing Player Rule above.</p>
-        <div class="settings-row" style="display:flex;gap:8px;align-items:flex-end">
-          <div style="flex:1">
-            <label>Week</label>
-            <select class="field" id="as-absent-ovr-week">
-              ${schedule.map(w => `<option value="${w.week}">Week ${w.week}${w.date ? ' — ' + w.date : ''}</option>`).join('')}
-            </select>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Manual adjustments add/subtract from calculated handicap.</p>
+          <div class="score-table-wrap">
+            <table class="hcpadj-table">
+              <thead><tr><th>Player</th><th>Calc</th><th>Adj</th><th>Final</th></tr></thead>
+              <tbody>${hcpAdjRows}</tbody>
+            </table>
           </div>
-          <div style="flex:1">
-            <label>Player</label>
-            <select class="field" id="as-absent-ovr-player">
-              ${allPlayers.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
-            </select>
-          </div>
-          <button type="button" class="btn btn-green btn-sm" onclick="adminMarkAbsent()">Mark Absent</button>
-        </div>
-        <div id="as-absent-ovr-list" class="absent-overrides-list">
-          ${_renderAbsentOverrides(c, allPlayers, schedule)}
         </div>
       </div>
 
       <!-- Skins -->
-      <div class="admin-section">
-        <div class="admin-section-title">Skins</div>
-        <div class="settings-row">
-          <label>Skins Enabled</label>
-          <label class="toggle-switch">
-            <input type="checkbox" id="as-skins-enabled" ${fmtConfig.skinsEnabled ? 'checked' : ''} />
-            <span class="toggle-slider"></span>
-          </label>
+      <div class="admin-section collapsed" id="as-sec-skins">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-skins')">
+          <span>Skins</span>
+          <span class="admin-chevron"></span>
         </div>
-        <div class="settings-row">
-          <label>Net Skins</label>
-          <label class="toggle-switch">
-            <input type="checkbox" id="as-skins-net" ${fmtConfig.skinsNet ? 'checked' : ''} />
-            <span class="toggle-slider"></span>
-          </label>
+        <div class="admin-section-body">
+          <div class="settings-row">
+            <label>Skins Enabled</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="as-skins-enabled" ${fmtConfig.skinsEnabled ? 'checked' : ''} />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-row">
+            <label>Net Skins</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="as-skins-net" ${fmtConfig.skinsNet ? 'checked' : ''} />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-row">
+            <label>Buy-In per Week ($)</label>
+            <input class="field" type="number" id="as-skins-buyin" value="${fmtConfig.skinsBuyIn || 0}" min="0" step="1" />
+          </div>
         </div>
-        <div class="settings-row">
-          <label>Buy-In per Week ($)</label>
-          <input class="field" type="number" id="as-skins-buyin" value="${fmtConfig.skinsBuyIn || 0}" min="0" step="1" />
+      </div>
+
+      <!-- ═══ GROUP 3: Weekly Management ═══ -->
+      <div class="admin-group-label">Weekly Management</div>
+
+      <!-- Mark Players Absent -->
+      <div class="admin-section collapsed" id="as-sec-absent">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-absent')">
+          <span>Mark Players Absent</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Mark a player absent for a specific week. Their score will be generated using the Missing Player Rule above.</p>
+          <div class="settings-row" style="display:flex;gap:8px;align-items:flex-end">
+            <div style="flex:1">
+              <label>Week</label>
+              <select class="field" id="as-absent-ovr-week">
+                ${schedule.map(w => `<option value="${w.week}">Week ${w.week}${w.date ? ' — ' + w.date : ''}</option>`).join('')}
+              </select>
+            </div>
+            <div style="flex:1">
+              <label>Player</label>
+              <select class="field" id="as-absent-ovr-player">
+                ${allPlayers.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+              </select>
+            </div>
+            <button type="button" class="btn btn-green btn-sm" onclick="adminMarkAbsent()">Mark Absent</button>
+          </div>
+          <div id="as-absent-ovr-list" class="absent-overrides-list">
+            ${_renderAbsentOverrides(c, allPlayers, schedule)}
+          </div>
         </div>
       </div>
 
       <!-- Custom / Makeup Rounds -->
-      <div class="admin-section">
-        <div class="admin-section-title">Custom / Makeup Rounds</div>
-        <p class="admin-help-text">Create one-off matchups for rain makeups, extra weeks, or special events.</p>
-        ${_renderExistingCustomRounds(c)}
-        <div id="custom-round-form" class="custom-round-form">
-          <div class="settings-row">
-            <label>Round Label</label>
-            <input class="field" id="cr-label" placeholder="e.g. May 28 Makeup" />
-          </div>
-          <div class="settings-row">
-            <label>Date</label>
-            <input class="field" type="date" id="cr-date" />
-          </div>
-          <div class="settings-row">
-            <label>Nine</label>
-            <div class="sd-nine-toggle">
-              <button class="btn-xs active" id="cr-nine-front" onclick="crSetNine('front')">Front</button>
-              <button class="btn-xs" id="cr-nine-back" onclick="crSetNine('back')">Back</button>
+      <div class="admin-section collapsed" id="as-sec-custom-rounds">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-custom-rounds')">
+          <span>Custom / Makeup Rounds</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Create one-off matchups for rain makeups, extra weeks, or special events.</p>
+          ${_renderExistingCustomRounds(c)}
+          <div id="custom-round-form" class="custom-round-form">
+            <div class="settings-row">
+              <label>Round Label</label>
+              <input class="field" id="cr-label" placeholder="e.g. May 28 Makeup" />
             </div>
-          </div>
-          <div id="cr-pairings" class="cr-pairings">
-            <div class="cr-pairing-row" data-idx="0">
-              <select class="field cr-team-select" id="cr-t1-0">
-                <option value="">Team A</option>
-                ${(c.teams || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
-              </select>
-              <span class="matchup-vs">vs</span>
-              <select class="field cr-team-select" id="cr-t2-0">
-                <option value="">Team B</option>
-                ${(c.teams || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
-              </select>
-              <button class="btn-xs btn-danger" onclick="crRemovePairing(0)" title="Remove">✕</button>
+            <div class="settings-row">
+              <label>Date</label>
+              <input class="field" type="date" id="cr-date" />
             </div>
-          </div>
-          <div class="cr-actions">
-            <button class="btn btn-outline btn-sm" onclick="crAddPairing()">+ Add Pairing</button>
-            <button class="btn btn-green btn-sm" onclick="saveCustomRound()">Save Round</button>
+            <div class="settings-row">
+              <label>Nine</label>
+              <div class="sd-nine-toggle">
+                <button class="btn-xs active" id="cr-nine-front" onclick="crSetNine('front')">Front</button>
+                <button class="btn-xs" id="cr-nine-back" onclick="crSetNine('back')">Back</button>
+              </div>
+            </div>
+            <div id="cr-pairings" class="cr-pairings">
+              <div class="cr-pairing-row" data-idx="0">
+                <select class="field cr-team-select" id="cr-t1-0">
+                  <option value="">Team A</option>
+                  ${(c.teams || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+                </select>
+                <span class="matchup-vs">vs</span>
+                <select class="field cr-team-select" id="cr-t2-0">
+                  <option value="">Team B</option>
+                  ${(c.teams || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+                </select>
+                <button class="btn-xs btn-danger" onclick="crRemovePairing(0)" title="Remove">✕</button>
+              </div>
+            </div>
+            <div class="cr-actions">
+              <button class="btn btn-outline btn-sm" onclick="crAddPairing()">+ Add Pairing</button>
+              <button class="btn btn-green btn-sm" onclick="saveCustomRound()">Save Round</button>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Season Rollover -->
-      <div class="admin-section admin-section-danger">
-        <div class="admin-section-title">⚠️ Season Rollover</div>
-        <p class="admin-help-text">End the current season: archives all scores to history, deletes match data, and clears the schedule. Teams and handicap settings are preserved.</p>
-        <div class="rollover-steps">
-          <div class="rollover-step">1. Export scores CSV (automatic backup)</div>
-          <div class="rollover-step">2. Archive all player rounds into score history</div>
-          <div class="rollover-step">3. Delete all match documents</div>
-          <div class="rollover-step">4. Clear schedule, tee times, and cancelled weeks</div>
-          <div class="rollover-step">5. Preserve teams, handicap settings, and manual adjustments</div>
-        </div>
-        <button class="btn btn-danger-solid btn-sm" onclick="seasonRollover()" style="margin-top:12px">
-          🔄 Start Season Rollover
-        </button>
-      </div>
+      <!-- ═══ GROUP 4: Data & Admin ═══ -->
+      <div class="admin-group-label">Data & Admin</div>
 
       <!-- Data Management -->
-      <div class="admin-section">
-        <div class="admin-section-title">Data Management</div>
-        <div class="settings-row">
-          <label>Export League Data</label>
-          <button class="btn btn-outline btn-sm" onclick="adminExportData()">Export JSON</button>
+      <div class="admin-section collapsed" id="as-sec-data">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-data')">
+          <span>Data Management</span>
+          <span class="admin-chevron"></span>
         </div>
-        <div class="settings-row">
-          <label>Export Scores CSV</label>
-          <button class="btn btn-outline btn-sm" onclick="adminExportScoresCSV()">Export CSV</button>
+        <div class="admin-section-body">
+          <div class="settings-row">
+            <label>Export League Data</label>
+            <button class="btn btn-outline btn-sm" onclick="adminExportData()">Export JSON</button>
+          </div>
+          <div class="settings-row">
+            <label>Export Scores CSV</label>
+            <button class="btn btn-outline btn-sm" onclick="adminExportScoresCSV()">Export CSV</button>
+          </div>
+          <div class="settings-row">
+            <label>Import League Data</label>
+            <input type="file" id="import-json-input" accept=".json" class="field" style="max-width:220px" />
+            <button class="btn btn-outline btn-sm" onclick="adminImportData()">Import JSON</button>
+          </div>
         </div>
-        <div class="settings-row">
-          <label>Import League Data</label>
-          <input type="file" id="import-json-input" accept=".json" class="field" style="max-width:220px" />
-          <button class="btn btn-outline btn-sm" onclick="adminImportData()">Import JSON</button>
+      </div>
+
+      <!-- Course Database (site-wide) -->
+      <div class="admin-section collapsed" id="as-sec-course-db">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-course-db')">
+          <span>Course Database</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Manage the site-wide course database. These courses appear in the wizard search for all leagues.</p>
+          <div id="admin-course-list"><p class="admin-help-text" style="opacity:0.5">Loading...</p></div>
+          <button class="btn btn-green btn-sm" style="margin-top:8px" onclick="adminShowAddCourseForm()">+ Add Course</button>
+          <div id="admin-course-form" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- Course Requests -->
+      <div class="admin-section collapsed" id="as-sec-course-req">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-course-req')">
+          <span>Course Requests</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Review course requests submitted by league commissioners.</p>
+          <div id="admin-course-requests"><p class="admin-help-text" style="opacity:0.5">Loading...</p></div>
+        </div>
+      </div>
+
+      <!-- ═══ GROUP 5: Danger Zone ═══ -->
+      <div class="admin-group-label danger">Danger Zone</div>
+
+      <!-- Season Rollover -->
+      <div class="admin-section admin-section-danger collapsed" id="as-sec-rollover">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-rollover')">
+          <span>Season Rollover</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">End the current season: archives all scores to history, deletes match data, and clears the schedule. Teams and handicap settings are preserved.</p>
+          <div class="rollover-steps">
+            <div class="rollover-step">1. Export scores CSV (automatic backup)</div>
+            <div class="rollover-step">2. Archive all player rounds into score history</div>
+            <div class="rollover-step">3. Delete all match documents</div>
+            <div class="rollover-step">4. Clear schedule, tee times, and cancelled weeks</div>
+            <div class="rollover-step">5. Preserve teams, handicap settings, and manual adjustments</div>
+          </div>
+          <button class="btn btn-danger-solid btn-sm" onclick="seasonRollover()" style="margin-top:12px">
+            Start Season Rollover
+          </button>
         </div>
       </div>
 
       <!-- Hard Reset -->
-      <div class="admin-section admin-section-danger">
-        <div class="admin-section-title">💣 Hard Reset</div>
-        <p class="admin-help-text">Delete ALL matches, player rounds, and custom rounds. Teams and league settings are preserved. This cannot be undone.</p>
-        <button class="btn btn-danger-solid btn-sm" onclick="adminHardReset()">Hard Reset League</button>
+      <div class="admin-section admin-section-danger collapsed" id="as-sec-reset">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-reset')">
+          <span>Hard Reset</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Delete ALL matches, player rounds, and custom rounds. Teams and league settings are preserved. This cannot be undone.</p>
+          <button class="btn btn-danger-solid btn-sm" onclick="adminHardReset()">Hard Reset League</button>
+        </div>
+      </div>
+
+      <!-- Delete League -->
+      <div class="admin-section admin-section-danger collapsed" id="as-sec-delete">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-delete')">
+          <span>Delete League</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Permanently delete this entire league and all its data. All matches, player records, score history, and settings will be destroyed. All members will lose access. This cannot be undone.</p>
+          <button class="btn btn-danger-solid btn-sm" onclick="adminDeleteLeague()">Delete This League</button>
+        </div>
       </div>
 
       <div class="admin-save-bar">
@@ -3690,6 +4475,269 @@ function renderAdminSettings() {
       document.getElementById('as-hcp-drop').value = btn.dataset.value;
     });
   });
+
+  // Load course database and requests asynchronously
+  renderAdminCourseList();
+  renderAdminCourseRequests();
+}
+
+// ===== Admin: Course Database =====
+async function loadAdminCourses() {
+  const snap = await window._FB.getDocs(window._FB.collection(window._FB.db, 'courses'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function renderAdminCourseList() {
+  const listEl = document.getElementById('admin-course-list');
+  if (!listEl) return;
+  try {
+    const courses = await loadAdminCourses();
+    if (!courses.length) {
+      listEl.innerHTML = '<p class="admin-help-text" style="opacity:0.5">No courses added yet.</p>';
+      return;
+    }
+    listEl.innerHTML = courses.map(c => `
+      <div class="admin-course-card" data-course-id="${c.id}">
+        <div class="admin-course-info">
+          <strong>${c.name || 'Untitled'}</strong>
+          <span class="admin-course-loc">${c.city || ''}${c.state ? ', ' + c.state : ''}</span>
+          ${c.tees ? `<span class="admin-course-tees">${c.tees}</span>` : ''}
+        </div>
+        <div class="admin-course-actions">
+          <button class="btn-xs" onclick="adminEditCourse('${c.id}')">Edit</button>
+          <button class="btn-xs btn-danger" onclick="adminDeleteCourse('${c.id}')">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('[renderAdminCourseList]', err);
+    listEl.innerHTML = '<p class="admin-help-text" style="color:var(--ac)">Failed to load courses.</p>';
+  }
+}
+
+function adminShowAddCourseForm(existing) {
+  const formEl = document.getElementById('admin-course-form');
+  if (!formEl) return;
+  const c = existing || {};
+  const isEdit = !!existing?.id;
+
+  formEl.style.display = 'block';
+  formEl.innerHTML = `
+    <div class="admin-course-form-inner">
+      <h4>${isEdit ? 'Edit' : 'Add'} Course</h4>
+      <div class="field"><label>Course Name *</label><input class="field" id="acf-name" value="${c.name || ''}" /></div>
+      <div class="field-row">
+        <div class="field"><label>City</label><input class="field" id="acf-city" value="${c.city || ''}" /></div>
+        <div class="field"><label>State</label><input class="field" id="acf-state" value="${c.state || ''}" /></div>
+      </div>
+      <div class="field"><label>Tees</label><input class="field" id="acf-tees" value="${c.tees || ''}" /></div>
+      <div class="field-row">
+        <div class="field"><label>Course Rating</label><input class="field" type="number" id="acf-rating" value="${c.rating || ''}" step="0.1" /></div>
+        <div class="field"><label>Slope</label><input class="field" type="number" id="acf-slope" value="${c.slope || ''}" /></div>
+      </div>
+      <div style="margin-top:12px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gd);margin-bottom:8px">Front 9</div>
+        <div id="acf-scorecard-front"></div>
+        <div style="margin-top:12px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gd);margin-bottom:8px">Back 9</div>
+        <div id="acf-scorecard-back"></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="btn btn-green btn-sm" onclick="adminSaveCourse(${isEdit ? "'" + c.id + "'" : 'null'})">${isEdit ? 'Update' : 'Add'} Course</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('admin-course-form').style.display='none'">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  // Render scorecard grids — use 'acf-front' / 'acf-back' as side names to avoid ID collision with wizard
+  _renderAdminScorecardGrid('acf-scorecard-front', 'acf-front', c.scorecard?.front || []);
+  _renderAdminScorecardGrid('acf-scorecard-back', 'acf-back', c.scorecard?.back || []);
+
+  // Scroll into view
+  formEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// Scorecard grid for admin form — like renderScorecardGrid but with custom side prefix to avoid ID conflicts
+function _renderAdminScorecardGrid(containerId, side, prefill) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const rows = ['yards', 'par', 'hdcp'];
+  const labels = { yards: 'Yards', par: 'Par', hdcp: 'Hdcp' };
+  const defaults = { yards: 350, par: 4, hdcp: 0 };
+
+  let html = `<div class="scorecard-grid"><table id="scorecard-${side}">
+    <thead><tr><th>Hole</th>`;
+  for (let h = 1; h <= 9; h++) html += `<th>${h}</th>`;
+  html += `<th>Total</th></tr></thead><tbody>`;
+
+  rows.forEach(row => {
+    html += `<tr><td>${labels[row]}</td>`;
+    for (let h = 1; h <= 9; h++) {
+      const val = prefill?.[h - 1]?.[row] ?? defaults[row];
+      html += `<td><input type="number" data-side="${side}" data-row="${row}" data-hole="${h}" value="${val}" min="0" max="${row === 'par' ? 9 : 9999}"></td>`;
+    }
+    html += `<td class="total" id="sc-${side}-${row}-total">–</td></tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+  container.innerHTML = html;
+
+  container.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => _updateScorecardTotals(side));
+  });
+  _updateScorecardTotals(side);
+}
+
+function _collectAdminScorecard() {
+  const scorecard = { front: null, back: null };
+  ['acf-front', 'acf-back'].forEach(side => {
+    const table = document.getElementById(`scorecard-${side}`);
+    if (!table) return;
+    const holes = [];
+    for (let h = 1; h <= 9; h++) {
+      holes.push({
+        hole: h,
+        par:   parseInt(table.querySelector(`input[data-side="${side}"][data-row="par"][data-hole="${h}"]`)?.value || '4'),
+        hdcp:  parseInt(table.querySelector(`input[data-side="${side}"][data-row="hdcp"][data-hole="${h}"]`)?.value || '0'),
+        yards: parseInt(table.querySelector(`input[data-side="${side}"][data-row="yards"][data-hole="${h}"]`)?.value || '0')
+      });
+    }
+    const key = side === 'acf-front' ? 'front' : 'back';
+    scorecard[key] = holes;
+  });
+  return scorecard;
+}
+
+async function adminSaveCourse(courseId) {
+  const name = document.getElementById('acf-name')?.value?.trim();
+  if (!name) { toast('Course name is required', 'error'); return; }
+
+  const id = courseId || `course_${Date.now()}`;
+  const data = {
+    name,
+    city: document.getElementById('acf-city')?.value?.trim() || '',
+    state: document.getElementById('acf-state')?.value?.trim() || '',
+    tees: document.getElementById('acf-tees')?.value?.trim() || '',
+    rating: parseFloat(document.getElementById('acf-rating')?.value) || null,
+    slope: parseInt(document.getElementById('acf-slope')?.value) || null,
+    scorecard: _collectAdminScorecard(),
+    source: 'admin',
+    createdBy: window.CURRENT_USER?.uid || '',
+    updatedAt: Date.now()
+  };
+  if (!courseId) data.createdAt = Date.now();
+
+  try {
+    await window._FB.setDoc(
+      window._FB.doc(window._FB.db, 'courses', id),
+      data, { merge: true }
+    );
+    toast(`Course ${courseId ? 'updated' : 'added'}`, 'success');
+    document.getElementById('admin-course-form').style.display = 'none';
+    renderAdminCourseList();
+  } catch (err) {
+    console.error('[adminSaveCourse]', err);
+    toast('Failed to save course — ' + (err.message || ''), 'error');
+  }
+}
+
+async function adminEditCourse(courseId) {
+  try {
+    const snap = await window._FB.getDoc(window._FB.doc(window._FB.db, 'courses', courseId));
+    if (!snap.exists()) { toast('Course not found', 'error'); return; }
+    adminShowAddCourseForm({ id: courseId, ...snap.data() });
+  } catch (err) {
+    console.error('[adminEditCourse]', err);
+    toast('Failed to load course', 'error');
+  }
+}
+
+async function adminDeleteCourse(courseId) {
+  if (!confirm('Delete this course from the database?')) return;
+  try {
+    await window._FB.deleteDoc(window._FB.doc(window._FB.db, 'courses', courseId));
+    toast('Course deleted', 'success');
+    renderAdminCourseList();
+  } catch (err) {
+    console.error('[adminDeleteCourse]', err);
+    toast('Failed to delete course', 'error');
+  }
+}
+
+// ===== Admin: Course Requests =====
+async function renderAdminCourseRequests() {
+  const el = document.getElementById('admin-course-requests');
+  if (!el) return;
+  try {
+    const snap = await window._FB.getDocs(
+      window._FB.query(
+        window._FB.collection(window._FB.db, 'courseRequests'),
+        window._FB.where('status', '==', 'pending')
+      )
+    );
+    const requests = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (!requests.length) {
+      el.innerHTML = '<p class="admin-help-text" style="opacity:0.5">No pending requests.</p>';
+      return;
+    }
+    el.innerHTML = requests.map(r => `
+      <div class="admin-course-request-card">
+        <div><strong>${r.courseName || 'Unknown'}</strong> — ${r.city || ''}</div>
+        <div class="admin-help-text">Requested by: ${r.requestedByEmail || 'Unknown'} · ${new Date(r.createdAt).toLocaleDateString()}</div>
+        ${r.photoUrl ? `<a href="${r.photoUrl}" target="_blank" rel="noopener" class="btn-xs" style="display:inline-block;margin-top:6px">View Scorecard Photo</a>` : '<span class="admin-help-text" style="opacity:0.5">No photo attached</span>'}
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn-xs btn-green" onclick="adminApproveCourseRequest('${r.id}')">Add to Database</button>
+          <button class="btn-xs btn-danger" onclick="adminRejectCourseRequest('${r.id}')">Dismiss</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('[renderAdminCourseRequests]', err);
+    el.innerHTML = '<p class="admin-help-text" style="color:var(--ac)">Failed to load requests.</p>';
+  }
+}
+
+async function adminApproveCourseRequest(requestId) {
+  try {
+    const snap = await window._FB.getDoc(window._FB.doc(window._FB.db, 'courseRequests', requestId));
+    if (!snap.exists()) return;
+    const r = snap.data();
+
+    // Pre-fill the add course form from the request
+    const cityParts = (r.city || '').split(',').map(s => s.trim());
+    adminShowAddCourseForm({
+      name: r.courseName || '',
+      city: cityParts[0] || '',
+      state: cityParts[1] || '',
+      tees: '',
+      scorecard: { front: [], back: [] }
+    });
+
+    // Mark request as approved
+    await window._FB.updateDoc(
+      window._FB.doc(window._FB.db, 'courseRequests', requestId),
+      { status: 'approved' }
+    );
+    renderAdminCourseRequests();
+    toast('Request approved — fill in the scorecard below and save', 'success');
+  } catch (err) {
+    console.error('[adminApproveCourseRequest]', err);
+    toast('Failed to approve request', 'error');
+  }
+}
+
+async function adminRejectCourseRequest(requestId) {
+  try {
+    await window._FB.updateDoc(
+      window._FB.doc(window._FB.db, 'courseRequests', requestId),
+      { status: 'rejected' }
+    );
+    toast('Request dismissed', 'default');
+    renderAdminCourseRequests();
+  } catch (err) {
+    console.error('[adminRejectCourseRequest]', err);
+    toast('Failed to dismiss request', 'error');
+  }
 }
 
 // ---- Absent Player Overrides ----
@@ -3968,10 +5016,24 @@ async function adminSaveSettings() {
 }
 
 // ---- Admin Settings: Season Date helpers ----
-function adminSetNine(week, nine) {
+async function adminSetNine(week, nine) {
   const schedule = APP.config.schedule || [];
   const entry = schedule.find(w => w.week == week);
-  if (entry) entry.nine = nine;
+  if (!entry || entry.nine === nine) return;
+  entry.nine = nine;
+
+  // Also update all match docs for this week so score tab reflects the change
+  const weekMatches = Object.entries(APP.matches).filter(([, m]) => m.week == week);
+  try {
+    for (const [key] of weekMatches) {
+      await window._FB.saveMatch(key, { nine });
+    }
+    await window._FB.saveLeagueConfig({ schedule });
+    toast(`Week ${week} → ${nine === 'front' ? 'Front' : 'Back'} 9`, 'success');
+  } catch (err) {
+    console.error('[adminSetNine]', err);
+    toast('Failed to update nine', 'error');
+  }
   renderAdminSettings();
 }
 
@@ -4022,14 +5084,27 @@ async function adminSaveSeasonDates() {
   }
 }
 
-async function adminSetHcpAdj(playerId, value) {
-  const adj = parseFloat(value) || 0;
+async function adminSetHcpAdj(playerId) {
+  const weekSel = document.querySelector(`select.hcpadj-week[data-pid="${playerId}"]`);
+  const adjInp  = document.querySelector(`input.hcpadj-input[data-pid="${playerId}"]`);
+  const week = parseInt(weekSel?.value) || 0;
+  const adj  = parseFloat(adjInp?.value) || 0;
   const manAdj = APP.config.manualAdj || {};
-  manAdj[playerId] = adj;
+
+  if (!week || adj === 0) {
+    delete manAdj[playerId];
+  } else {
+    manAdj[playerId] = { adj, week };
+  }
   APP.config.manualAdj = manAdj;
   try {
-    await window._FB.saveLeagueConfig({ manualAdj: manAdj });
-    toast('Handicap adjustment saved', 'success');
+    await window._FB.saveLeagueConfig({ manualAdj });
+    if (week && adj !== 0) {
+      toast(`Handicap adj ${adj > 0 ? '+' : ''}${adj} for Week ${week}`, 'success');
+    } else {
+      toast('Handicap adjustment cleared', 'success');
+    }
+    renderAdminSettings();
   } catch (err) {
     console.error('[adminSetHcpAdj]', err);
     toast('Failed to save adjustment', 'error');
@@ -4140,6 +5215,27 @@ async function adminHardReset() {
   } catch (err) {
     console.error('[hardReset]', err);
     toast('Reset failed: ' + err.message, 'error');
+  }
+}
+
+async function adminDeleteLeague() {
+  const name = APP.config?.name || 'this league';
+  const input = prompt(`🗑️ DELETE LEAGUE\n\nThis will permanently delete "${name}" and ALL data:\n• All matches and scores\n• All player rounds and history\n• All members\n• League settings\n\nThis cannot be undone.\n\nType "DELETE" to confirm:`);
+  if (input !== 'DELETE') { toast('Delete cancelled', 'info'); return; }
+
+  try {
+    toast('Deleting league...', 'info');
+    await window._FB.deleteLeague();
+    APP.config = null;
+    APP.matches = {};
+    APP.rounds = {};
+    APP.leagueId = null;
+    APP.member = null;
+    toast('League deleted', 'success');
+    showLeagueSelect();
+  } catch (err) {
+    console.error('[deleteLeague]', err);
+    toast('Delete failed: ' + err.message, 'error');
   }
 }
 
@@ -4564,11 +5660,13 @@ function renderScores() {
               <div class="match-card-teams">
                 <div class="match-team-block">
                   <span class="match-team-name">${m.team1Name || 'Team 1'}</span>
+                  ${(() => { const t = (APP.config.teams||[]).find(t=>t.id===m.team1Id); return t?.players?.length ? `<div class="match-team-players">${t.players.map(p=>p.name?.split(' ')[0]).join(' · ')}</div>` : ''; })()}
                   ${status === 'committed' ? `<span class="match-team-pts">${m.result?.pts1 ?? '–'}</span>` : ''}
                 </div>
                 <span class="match-vs">vs</span>
                 <div class="match-team-block right">
                   <span class="match-team-name">${m.team2Name || 'Team 2'}</span>
+                  ${(() => { const t = (APP.config.teams||[]).find(t=>t.id===m.team2Id); return t?.players?.length ? `<div class="match-team-players">${t.players.map(p=>p.name?.split(' ')[0]).join(' · ')}</div>` : ''; })()}
                   ${status === 'committed' ? `<span class="match-team-pts">${m.result?.pts2 ?? '–'}</span>` : ''}
                 </div>
               </div>
@@ -4724,7 +5822,7 @@ function openMatch(matchKey) {
   const t2hi = t2.players.find(p => p.hilo === 'HI') || t2.players[1];
 
   // Calculate handicaps
-  const hcp = (p) => p ? calcHcp(APP.rounds[p.id] || [], config) : 0;
+  const hcp = (p) => p ? calcHcpAdj(APP.rounds[p.id] || [], config, p.id, match.week) : 0;
   const hcp1lo = hcp(t1lo), hcp1hi = hcp(t1hi);
   const hcp2lo = hcp(t2lo), hcp2hi = hcp(t2hi);
 
@@ -4919,7 +6017,7 @@ function _onScoreInput(hiloKey) {
   const t1hi = t1.players.find(p => p.hilo === 'HI') || t1.players[1];
   const t2lo = t2.players.find(p => p.hilo === 'LO') || t2.players[0];
   const t2hi = t2.players.find(p => p.hilo === 'HI') || t2.players[1];
-  const hcp = (p) => p ? calcHcp(APP.rounds[p.id] || [], config) : 0;
+  const hcp = (p) => p ? calcHcpAdj(APP.rounds[p.id] || [], config, p.id, match.week) : 0;
 
   // Read current scores from inputs
   const liveScores = _readInputScores();
@@ -5252,7 +6350,7 @@ async function handleApproveScores() {
     const t2hi   = t2.players.find(p => p.hilo === 'HI') || t2.players[1];
     const pv         = _getPV(config);
     const playsBoth  = _getAbsentRule(config) === 'plays_both';
-    const hcp        = p => p ? calcHcp(APP.rounds[p.id] || [], config) : 0;
+    const hcp        = p => p ? calcHcpAdj(APP.rounds[p.id] || [], config, p.id, match.week) : 0;
     const scores     = match.scores || {};
 
     // plays_both: if one player is absent, the present player's score runs against both opponents
@@ -5342,7 +6440,7 @@ async function handleForceCommit() {
     const t2lo   = t2.players.find(p => p.hilo === 'LO') || t2.players[0];
     const t2hi   = t2.players.find(p => p.hilo === 'HI') || t2.players[1];
     const pv     = _getPV(config);
-    const hcpFn  = p => p ? calcHcp(APP.rounds[p.id] || [], config) : 0;
+    const hcpFn  = p => p ? calcHcpAdj(APP.rounds[p.id] || [], config, p.id, match.week) : 0;
     const scores = match.scores || {};
 
     const hiRes  = calcMatch(scores[t1hi?.id]||[], scores[t2hi?.id]||[], hcpFn(t1hi), hcpFn(t2hi), holes, pv);
@@ -5462,12 +6560,17 @@ async function loadLeague(leagueId) {
   const titleEl = document.querySelector('.app-header-titles h1');
   if (titleEl) titleEl.textContent = APP.config.leagueName || 'My League';
 
-  // Check commissioner
+  // Check commissioner — show/hide admin dropdown
   const isCommissioner = APP.member?.role === 'commissioner';
-  document.querySelector('.nav-divider')?.style?.setProperty('display', isCommissioner ? '' : 'none');
-  document.querySelectorAll('.admin-tab').forEach(t => {
-    t.style.display = isCommissioner ? '' : 'none';
-  });
+  const adminWrap = document.getElementById('admin-dropdown-wrap');
+  if (adminWrap) adminWrap.style.display = isCommissioner ? '' : 'none';
+
+  // Populate profile menu
+  const user = APP.user || window._currentUser;
+  const pmName = document.getElementById('pm-name');
+  const pmEmail = document.getElementById('pm-email');
+  if (pmName) pmName.textContent = user?.displayName || 'Player';
+  if (pmEmail) pmEmail.textContent = user?.email || '';
 
   showView('app');
   navTo('dashboard');
@@ -5509,15 +6612,23 @@ async function showLeagueSelect() {
   const container = document.getElementById('league-list');
   if (!container) { showView('league-select'); return; }
 
-  const leagueCards = leagues.length ? leagues.map(l => `
-    <div class="league-card" onclick="loadLeague('${l.leagueId}')">
-      <div class="league-card-info">
-        <h3>${l.name}</h3>
-        <p>${l.role}</p>
+  // Color palette for league avatars
+  const _avatarColors = ['#2d8a4e','#14a0a0','#c9a030','#8b5e34','#6366f1','#f05028','#0ea5e9','#a855f7'];
+  const leagueCards = leagues.length ? leagues.map((l, idx) => {
+    const initials = (l.name || 'L').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    const bgColor = _avatarColors[idx % _avatarColors.length];
+    const roleLabel = l.role === 'commissioner' ? 'Commissioner' : 'Member';
+    return `
+      <div class="league-card" onclick="loadLeague('${l.leagueId}')">
+        <div class="league-card-avatar" style="background:${bgColor}">${initials}</div>
+        <div class="league-card-info">
+          <h3>${l.name}</h3>
+          <div class="league-card-meta">${roleLabel}</div>
+        </div>
+        <span class="league-card-chevron">›</span>
       </div>
-      <span class="league-card-chevron">›</span>
-    </div>
-  `).join('') : `
+    `;
+  }).join('') : `
     <div class="league-empty">
       <p>You're not in any leagues yet.</p>
     </div>
@@ -5653,20 +6764,46 @@ async function handleEmailSignUp(e) {
   const name  = document.getElementById('signup-name')?.value?.trim();
   const email = document.getElementById('signup-email')?.value?.trim();
   const pass  = document.getElementById('signup-pass')?.value;
+  const tos   = document.getElementById('signup-agree-tos')?.checked;
   if (!name || !email || !pass) { toast('Fill all fields', 'error'); return; }
-  const { createUserWithEmailAndPassword, getAuth, saveUserProfile } = window._FB;
+  if (!tos) { toast('Please agree to the Terms of Service and Privacy Policy', 'error'); return; }
+  const { createUserWithEmailAndPassword, getAuth, saveUserProfile, sendEmailVerification, updateProfile } = window._FB;
   try {
     const result = await createUserWithEmailAndPassword(getAuth(), email, pass);
+    // Set display name on Firebase auth profile
+    await updateProfile(result.user, { displayName: name });
     await saveUserProfile(result.user.uid, { displayName: name, email, createdAt: Date.now() });
+    // Send email verification
+    try {
+      await sendEmailVerification(result.user);
+    } catch (verErr) {
+      console.warn('[Auth] sendEmailVerification failed:', verErr);
+    }
     await onUserSignedIn(result.user);
   } catch (err) {
     toast(friendlyAuthError(err.code), 'error');
   }
 }
 
+// Verification gate cutoff — accounts created before this date skip the gate.
+// Set to the date verification was enabled so existing users aren't locked out.
+const VERIFICATION_CUTOFF = new Date('2026-02-24T00:00:00Z').getTime();
+
 async function onUserSignedIn(user) {
   APP.user = user;
   window._currentUser = user;
+  // Gate email/password users who haven't verified their email
+  // Google sign-in users are always verified, so skip the gate for them
+  // Only enforce for accounts created AFTER we enabled verification
+  const isEmailProvider = user.providerData?.some(p => p.providerId === 'password');
+  const createdAt = user.metadata?.creationTime ? new Date(user.metadata.creationTime).getTime() : 0;
+  const isNewAccount = createdAt >= VERIFICATION_CUTOFF;
+  if (isEmailProvider && !user.emailVerified && isNewAccount) {
+    const addrEl = document.getElementById('verify-email-addr');
+    if (addrEl) addrEl.textContent = user.email || '';
+    showView('verify-email');
+    return;
+  }
   await showLeagueSelect();
 }
 
@@ -5687,6 +6824,74 @@ async function handleSignOut() {
   if (btns)    btns.style.display    = 'flex';
 }
 
+async function handleForgotPassword(e) {
+  e?.preventDefault();
+  const email = document.getElementById('forgot-email')?.value?.trim();
+  if (!email) { toast('Enter your email address', 'error'); return; }
+  const { sendPasswordResetEmail, getAuth } = window._FB;
+  try {
+    await sendPasswordResetEmail(getAuth(), email);
+    // Hide the form and show success message
+    const form = document.getElementById('forgot-password-form');
+    const success = document.getElementById('forgot-success');
+    if (form) form.style.display = 'none';
+    if (success) success.style.display = 'block';
+  } catch (err) {
+    // Don't reveal whether the email exists — always show a generic message
+    if (err.code === 'auth/invalid-email') {
+      toast('Invalid email address', 'error');
+    } else {
+      // Show success even if email doesn't exist (security best practice)
+      const form = document.getElementById('forgot-password-form');
+      const success = document.getElementById('forgot-success');
+      if (form) form.style.display = 'none';
+      if (success) success.style.display = 'block';
+    }
+  }
+}
+
+async function handleCheckVerification() {
+  const { getAuth } = window._FB;
+  const user = getAuth().currentUser;
+  if (!user) { showView('signin'); return; }
+  // Reload user to get the latest emailVerified status
+  try {
+    await user.reload();
+  } catch (err) {
+    console.warn('[Auth] reload failed:', err);
+  }
+  if (user.emailVerified) {
+    toast('Email verified!', 'success');
+    APP.user = user;
+    window._currentUser = user;
+    await showLeagueSelect();
+  } else {
+    toast('Email not yet verified — check your inbox', 'error');
+  }
+}
+
+async function handleResendVerification() {
+  const { getAuth, sendEmailVerification } = window._FB;
+  const user = getAuth().currentUser;
+  if (!user) { showView('signin'); return; }
+  try {
+    await sendEmailVerification(user);
+    toast('Verification email sent!', 'success');
+  } catch (err) {
+    if (err.code === 'auth/too-many-requests') {
+      toast('Too many attempts — wait a moment and try again', 'error');
+    } else {
+      toast('Could not send verification email', 'error');
+    }
+  }
+}
+
+// Track which view the user came from before viewing Terms/Privacy
+window._legalBackView = 'signup';
+window._legalBack = function() {
+  showView(window._legalBackView || 'signup');
+};
+
 function friendlyAuthError(code) {
   const msgs = {
     'auth/user-not-found':   'No account with that email',
@@ -5698,6 +6903,75 @@ function friendlyAuthError(code) {
   };
   return msgs[code] || 'Sign-in failed — try again';
 }
+
+// ===== Admin Dropdown & Profile Menu =====
+function toggleAdminDropdown() {
+  const menu = document.getElementById('admin-dropdown-menu');
+  const btn = document.getElementById('admin-dropdown-btn');
+  if (!menu) return;
+  const isOpen = menu.classList.toggle('open');
+  btn?.classList.toggle('open', isOpen);
+  if (isOpen) {
+    // Position fixed menu relative to the button
+    const rect = btn.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    // Open upward if button is near the bottom of viewport
+    if (spaceBelow < 180) {
+      menu.style.bottom = (window.innerHeight - rect.top) + 'px';
+      menu.style.top = 'auto';
+    } else {
+      menu.style.top = rect.bottom + 'px';
+      menu.style.bottom = 'auto';
+    }
+    menu.style.left = Math.min(rect.left, window.innerWidth - 150) + 'px';
+    // Close on outside click
+    setTimeout(() => {
+      const handler = (e) => {
+        if (!e.target.closest('.admin-dropdown-wrap')) {
+          menu.classList.remove('open');
+          btn?.classList.remove('open');
+          document.removeEventListener('click', handler);
+        }
+      };
+      document.addEventListener('click', handler);
+    }, 0);
+  }
+}
+
+function adminNavTo(tab) {
+  navTo(tab);
+  // Close dropdown
+  document.getElementById('admin-dropdown-menu')?.classList.remove('open');
+  document.getElementById('admin-dropdown-btn')?.classList.remove('open');
+  // Highlight the admin button
+  document.getElementById('admin-dropdown-btn')?.classList.add('active');
+  // Remove active from regular nav tabs
+  document.querySelectorAll('.app-nav > .nav-tab').forEach(t => t.classList.remove('active'));
+  // Highlight the clicked item
+  document.querySelectorAll('.admin-dropdown-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.tab === tab);
+  });
+}
+
+function toggleProfileMenu() {
+  const menu = document.getElementById('profile-menu');
+  if (!menu) return;
+  const isOpen = menu.classList.toggle('open');
+  if (isOpen) {
+    setTimeout(() => {
+      const handler = (e) => {
+        if (!e.target.closest('.profile-menu-wrap')) {
+          menu.classList.remove('open');
+          document.removeEventListener('click', handler);
+        }
+      };
+      document.addEventListener('click', handler);
+    }, 0);
+  }
+}
+window.toggleAdminDropdown = toggleAdminDropdown;
+window.adminNavTo = adminNavTo;
+window.toggleProfileMenu = toggleProfileMenu;
 
 // Auth state is handled by the inline module script in index.html
 // which calls window.showLeagueSelect() or window.showView('splash')
@@ -5721,8 +6995,13 @@ document.addEventListener('DOMContentLoaded', () => {
   initOCRUpload();
 
   // Nav tabs
-  document.querySelectorAll('.nav-tab').forEach(btn => {
-    btn.addEventListener('click', () => navTo(btn.dataset.tab));
+  document.querySelectorAll('.app-nav > .nav-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      navTo(btn.dataset.tab);
+      // Clear admin dropdown active state when clicking a regular tab
+      document.getElementById('admin-dropdown-btn')?.classList.remove('active');
+      document.querySelectorAll('.admin-dropdown-item').forEach(i => i.classList.remove('active'));
+    });
   });
 
   // Wizard
@@ -5737,6 +7016,22 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-google-signin')?.addEventListener('click', handleGoogleSignIn);
   document.getElementById('signin-form')?.addEventListener('submit', handleEmailSignIn);
   document.getElementById('link-to-signup')?.addEventListener('click', () => showView('signup'));
+  document.getElementById('link-forgot-password')?.addEventListener('click', () => {
+    // Reset the forgot password form state before showing
+    const form = document.getElementById('forgot-password-form');
+    const success = document.getElementById('forgot-success');
+    if (form) form.style.display = '';
+    if (success) success.style.display = 'none';
+    showView('forgot-password');
+  });
+
+  // Forgot password
+  document.getElementById('forgot-password-form')?.addEventListener('submit', handleForgotPassword);
+
+  // Email verification
+  document.getElementById('btn-check-verification')?.addEventListener('click', handleCheckVerification);
+  document.getElementById('btn-resend-verification')?.addEventListener('click', handleResendVerification);
+  document.getElementById('btn-verify-signout')?.addEventListener('click', handleSignOut);
 
   // Sign up
   document.getElementById('btn-google-signup')?.addEventListener('click', handleGoogleSignIn);
@@ -5748,7 +7043,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // App header
   document.getElementById('btn-switch-league')?.addEventListener('click', showLeagueSelect);
-  document.getElementById('user-avatar')?.addEventListener('click', handleSignOut);
+  document.getElementById('user-avatar')?.addEventListener('click', toggleProfileMenu);
 
   // Wizard step 6: re-render schedule if user goes back/forward
   // (handled by wizardNext collecting data and renderScheduleWeeks on wizard init)
@@ -5769,6 +7064,9 @@ window.loadLeague         = loadLeague;
 window.showLeagueSelect   = showLeagueSelect;
 window.startWizard        = startWizard;
 window.handleSignOut      = handleSignOut;
+window.handleForgotPassword    = handleForgotPassword;
+window.handleCheckVerification = handleCheckVerification;
+window.handleResendVerification = handleResendVerification;
 window.addScheduleWeek    = addScheduleWeek;
 window.renumberSchedule   = renumberSchedule;
 window.selectFormat       = selectFormat;

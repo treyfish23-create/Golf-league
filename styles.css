@@ -47,8 +47,14 @@ input:focus, select:focus, textarea:focus {
 #view-wizard.active,
 #view-app.active { display: flex !important; flex-direction: column; }
 
-/* ===== Splash ===== */
+/* ===== Landing Page ===== */
 #view-splash {
+  background: var(--bg);
+  flex-direction: column;
+}
+
+/* Hero */
+.landing-hero {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -66,7 +72,7 @@ input:focus, select:focus, textarea:focus {
   z-index: 0;
 }
 
-.splash-content {
+.landing-hero-content {
   position: relative;
   z-index: 1;
   display: flex;
@@ -74,7 +80,7 @@ input:focus, select:focus, textarea:focus {
   align-items: center;
   gap: 12px;
   width: 100%;
-  max-width: 400px;
+  max-width: 480px;
   padding: 0 32px;
   text-align: center;
 }
@@ -98,6 +104,212 @@ input:focus, select:focus, textarea:focus {
   color: var(--gl);
 }
 
+.landing-headline {
+  font-family: 'Outfit', sans-serif;
+  font-size: 22px;
+  font-weight: 300;
+  color: var(--wh);
+  line-height: 1.4;
+  margin: 8px 0 0;
+}
+
+.landing-sub {
+  color: var(--mt);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 8px;
+  max-width: 380px;
+}
+
+/* Scroll hint */
+.landing-scroll-hint {
+  position: absolute;
+  bottom: 32px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--mt);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  transition: color 0.2s;
+}
+.landing-scroll-hint:hover { color: var(--gd); }
+.scroll-arrow {
+  font-size: 18px;
+  animation: bounceArrow 2s infinite;
+}
+@keyframes bounceArrow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(6px); }
+}
+
+/* ===== Features Section ===== */
+.landing-features {
+  padding: 80px 24px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.landing-section-title {
+  font-family: 'Dela Gothic One', cursive;
+  font-size: 22px;
+  color: var(--wh);
+  text-align: center;
+  letter-spacing: 1px;
+  margin-bottom: 48px;
+}
+
+.landing-features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.landing-feature-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  text-align: center;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.landing-feature-card:hover {
+  border-color: var(--gd);
+  transform: translateY(-2px);
+}
+
+.feature-icon {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+
+.landing-feature-card h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--wh);
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+}
+
+.landing-feature-card p {
+  font-size: 13px;
+  color: var(--mt);
+  line-height: 1.5;
+}
+
+/* ===== How It Works ===== */
+.landing-how {
+  padding: 60px 24px 80px;
+  max-width: 800px;
+  margin: 0 auto;
+  border-top: 1px solid var(--bd);
+}
+
+.landing-steps {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+}
+
+.landing-step {
+  flex: 1;
+  text-align: center;
+  padding: 0 16px;
+  max-width: 240px;
+}
+
+.landing-step-connector {
+  width: 40px;
+  height: 2px;
+  background: var(--bd);
+  flex-shrink: 0;
+  margin-top: 22px;
+}
+
+.step-number {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--gd);
+  color: var(--bg);
+  font-family: 'Dela Gothic One', cursive;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.landing-step h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--wh);
+  margin-bottom: 8px;
+}
+
+.landing-step p {
+  font-size: 13px;
+  color: var(--mt);
+  line-height: 1.5;
+}
+
+/* ===== Bottom CTA ===== */
+.landing-cta {
+  padding: 80px 24px;
+  text-align: center;
+  background: radial-gradient(ellipse at 50% 60%, #0d2b14 0%, var(--bg) 100%);
+}
+
+.landing-cta h2 {
+  font-family: 'Dela Gothic One', cursive;
+  font-size: 26px;
+  color: var(--wh);
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.landing-cta p {
+  color: var(--mt);
+  font-size: 14px;
+  margin-bottom: 28px;
+}
+
+.landing-cta .btn-primary {
+  max-width: 280px;
+  margin: 0 auto;
+}
+
+/* ===== Landing Footer ===== */
+.landing-footer {
+  padding: 40px 24px;
+  text-align: center;
+  border-top: 1px solid var(--bd);
+}
+
+.landing-footer-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.landing-footer-tagline {
+  color: var(--mt);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-top: 8px;
+}
+
+/* Splash subtitle & divider (no longer used, kept for compat) */
 .splash-subtitle {
   color: var(--mt);
   font-size: 11px;
@@ -613,6 +825,248 @@ details > summary::marker { display: none; }
   color: var(--ac);
 }
 
+/* ===== Golf Course API Search ===== */
+
+/* Wrapper for search input + dropdown */
+.course-search-wrap {
+  position: relative;
+}
+
+/* Autocomplete dropdown */
+.course-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.course-dropdown:empty {
+  display: none;
+}
+
+/* Individual dropdown item */
+.course-dropdown-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--bd);
+  transition: background .12s;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.course-dropdown-item:last-child {
+  border-bottom: none;
+}
+.course-dropdown-item:hover {
+  background: var(--al);
+}
+.course-dropdown-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--tx);
+}
+.course-dropdown-loc {
+  font-size: 12px;
+  color: var(--mt);
+}
+
+/* Loading / empty states inside dropdown */
+.course-dropdown-item.course-search-loading {
+  cursor: default;
+  text-align: center;
+  color: var(--gd);
+  font-size: 13px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.course-dropdown-item.course-search-empty {
+  cursor: default;
+  text-align: center;
+  color: var(--mt);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* Selected course badge */
+.course-selected-badge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  background: rgba(20, 160, 160, 0.1);
+  border: 1px solid var(--gd);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gd);
+}
+.course-clear-btn {
+  background: none;
+  border: none;
+  color: var(--mt);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color .15s, background .15s;
+}
+.course-clear-btn:hover {
+  color: var(--ac);
+  background: rgba(240, 80, 40, 0.1);
+}
+
+/* Tee selector */
+.tee-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.tee-option-card {
+  padding: 8px 12px;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+}
+.tee-option-card:hover {
+  border-color: var(--gd);
+  background: var(--al);
+}
+.tee-option-card.tee-option-selected {
+  border-color: var(--gd);
+  background: rgba(20, 160, 160, 0.12);
+  box-shadow: 0 0 0 2px rgba(20, 160, 160, 0.2);
+}
+.tee-option-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--tx);
+}
+.tee-option-info {
+  font-size: 11px;
+  color: var(--mt);
+  margin-top: 2px;
+}
+.tee-gender {
+  font-weight: 400;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* "or enter manually" divider */
+.wizard-divider-or {
+  text-align: center;
+  position: relative;
+  margin: 20px 0;
+  color: var(--mt);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.wizard-divider-or::before,
+.wizard-divider-or::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 38%;
+  height: 1px;
+  background: var(--bd);
+}
+.wizard-divider-or::before { left: 0; }
+.wizard-divider-or::after  { right: 0; }
+
+/* Course not found link */
+.course-not-found-link {
+  margin-top: 12px;
+  text-align: center;
+}
+.course-not-found-link a {
+  color: var(--ac);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.course-not-found-link a:hover {
+  opacity: 0.8;
+}
+
+/* Local course badge in dropdown */
+.course-badge-local {
+  color: var(--gl);
+  font-size: 11px;
+  margin-left: 4px;
+}
+.course-dropdown-item.course-local {
+  border-left: 3px solid var(--gl);
+}
+
+/* Admin course cards */
+.admin-course-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+}
+.admin-course-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.admin-course-loc {
+  font-size: 12px;
+  color: var(--mt);
+}
+.admin-course-tees {
+  font-size: 11px;
+  color: var(--mt);
+  opacity: 0.7;
+}
+.admin-course-actions {
+  display: flex;
+  gap: 6px;
+}
+.admin-course-form-inner {
+  padding: 16px;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius-sm);
+  margin-top: 12px;
+}
+.admin-course-form-inner h4 {
+  margin-bottom: 12px;
+  color: var(--gd);
+  font-size: 14px;
+}
+.admin-course-request-card {
+  padding: 12px;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+
 /* ===== Scorecard Grid ===== */
 .scorecard-grid {
   overflow-x: auto;
@@ -918,11 +1372,15 @@ input[type="time"] {
   transform: translateX(2px);
 }
 
+.league-card-info {
+  flex: 1;
+  min-width: 0;
+}
 .league-card-info h3 {
   font-size: 16px;
   font-weight: 700;
   color: var(--wh);
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 
 .league-card-info p {
@@ -1332,6 +1790,11 @@ input[type="time"] {
   color: var(--ac);
   line-height: 1;
 }
+.hcp-card .hcp-actual {
+  font-size: 11px;
+  color: var(--mt);
+  margin-top: 2px;
+}
 
 .hcp-card .hcp-label {
   font-size: 10px;
@@ -1477,14 +1940,75 @@ input[type="time"] {
 }
 
 /* ===== Admin Tab ===== */
+
+/* Group divider labels */
+.admin-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--ac);
+  padding: 20px 0 6px;
+  margin-top: 4px;
+}
+.admin-group-label.danger { color: #e74c3c; }
+
 .admin-section {
-  margin-bottom: 28px;
+  margin-bottom: 10px;
   background: var(--cd);
   border: 1px solid var(--bd);
   border-radius: var(--radius);
-  padding: 18px;
+  padding: 0;
 }
 
+/* Clickable section header */
+.admin-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  padding: 14px 20px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.admin-section-header:hover { background: rgba(255,255,255,0.02); border-radius: var(--radius); }
+.admin-section-header span:first-child {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--gd);
+}
+
+/* Chevron icon */
+.admin-chevron {
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--mt);
+  transition: transform 0.25s ease;
+  flex-shrink: 0;
+}
+.admin-section.collapsed .admin-chevron {
+  transform: rotate(-90deg);
+}
+
+/* Collapsible body */
+.admin-section-body {
+  padding: 0 20px 20px;
+  overflow: hidden;
+  max-height: 5000px;
+  transition: max-height 0.35s ease, padding 0.25s ease, opacity 0.2s ease;
+  opacity: 1;
+}
+.admin-section.collapsed .admin-section-body {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+}
+
+/* Keep old title class for backwards compat but hide it — content now uses header */
 .admin-section-title {
   font-size: 11px;
   font-weight: 700;
@@ -1745,6 +2269,88 @@ select.field {
 .hcp-card { position: relative; }
 .hcp-card .hcp-team-name { font-size: 11px; color: var(--mt); margin-bottom: 6px; }
 .hcp-card .hcp-adj { font-size: 10px; color: var(--gd); margin-top: 2px; }
+
+/* Handicap Calculator */
+.hcp-calculator {
+  margin-top: 32px;
+  padding: 20px;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius);
+}
+.hcp-calc-title {
+  font-family: 'Dela Gothic One', cursive;
+  font-size: 16px;
+  color: var(--gd);
+  margin-bottom: 8px;
+}
+.hcp-calc-dropdown {
+  width: 100%;
+  max-width: 300px;
+  padding: 10px 14px;
+  background: var(--ip);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius-sm);
+  color: var(--tx);
+  font-size: 14px;
+  font-family: 'Outfit', sans-serif;
+  cursor: pointer;
+}
+.hcp-calc-dropdown:focus { outline: 2px solid var(--gd); outline-offset: -1px; }
+
+.hcp-calc-breakdown { margin-top: 16px; }
+.hcp-calc-section { margin-bottom: 20px; }
+.hcp-calc-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--mt); margin-bottom: 10px;
+}
+
+.hcp-calc-rounds {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.hcp-round-chip {
+  display: flex; flex-direction: column; align-items: center;
+  background: var(--al); border: 1px solid var(--bd);
+  border-radius: var(--radius-sm); padding: 8px 12px; min-width: 56px;
+  transition: all 0.2s;
+}
+.hcp-round-chip.used { border-color: var(--gn); }
+.hcp-round-chip.old { opacity: 0.4; }
+.hcp-round-chip.dropped { border-color: var(--ac); background: rgba(200,16,46,0.08); }
+.hcp-round-label { font-size: 9px; color: var(--mt); font-weight: 600; }
+.hcp-round-score { font-size: 18px; font-weight: 800; color: var(--wh); }
+.hcp-round-diff { font-size: 11px; color: var(--gd); font-weight: 600; }
+
+.hcp-calc-steps { display: flex; flex-direction: column; gap: 6px; }
+.hcp-calc-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; background: var(--al); border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.hcp-calc-row.dropped { background: rgba(200,16,46,0.06); }
+.hcp-calc-row.final {
+  background: rgba(255,215,0,0.08); border: 1px solid rgba(255,215,0,0.2);
+  margin-top: 4px;
+}
+.hcp-calc-desc { color: var(--mt); }
+.hcp-calc-val { font-weight: 700; color: var(--tx); }
+.hcp-final-big { font-size: 22px; color: var(--gd); }
+
+/* Stroke distribution grid */
+.hcp-stroke-grid {
+  display: grid; grid-template-columns: auto repeat(9, 1fr);
+  gap: 2px; font-size: 11px; text-align: center;
+}
+.hcp-stroke-header {
+  font-weight: 700; font-size: 10px; color: var(--mt);
+  padding: 6px 4px; text-transform: uppercase;
+}
+.hcp-stroke-cell {
+  padding: 6px 4px; background: var(--al); border-radius: 4px; color: var(--tx);
+}
+.hcp-stroke-cell.label { font-weight: 600; color: var(--mt); background: none; text-align: right; padding-right: 8px; }
+.hcp-stroke-cell.strokes { font-weight: 800; }
+.hcp-stroke-cell.has-stroke { background: rgba(255,215,0,0.12); color: var(--gd); }
 .hcp-card .hcp-detail {
   display: flex; gap: 8px; justify-content: center;
   margin-top: 8px; font-size: 11px; color: var(--mt);
@@ -1769,7 +2375,8 @@ select.field {
 .rank-badge.silver { background: #8a8a8a; color: #fff; }
 .rank-badge.bronze { background: #8b5e34; color: #fff; }
 .rank-num-plain { font-size: 13px; color: var(--mt); }
-.standings-table .my-team-row { background: rgba(59,173,148,0.08); }
+.standings-table .my-team-row { background: rgba(59,173,148,0.08); border-left: 3px solid var(--gd); }
+.standings-table tbody tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
 .standings-table .gp { font-size: 12px; color: var(--mt); }
 
 /* ===== Enhanced Scores Tab ===== */
@@ -1938,7 +2545,7 @@ select.field {
   .splash-title { font-size: 28px; }
   .auth-card { padding: 24px 20px; }
   .wizard-step-title { font-size: 18px; }
-  .hcp-card .hcp-value { font-size: 24px; }
+  .hcp-card .hcp-value { font-size: 22px; }
 
   .season-date-row { grid-template-columns: 36px 1fr 48px 44px 32px 32px; gap: 4px; padding: 6px; }
   .sd-week { font-size: 11px; }
@@ -2992,6 +3599,7 @@ input[type="range"]::-webkit-slider-runnable-track {
 
 /* ===== Season Rollover ===== */
 .admin-section-danger { border: 1px solid rgba(231, 76, 60, 0.3); }
+.admin-section-danger .admin-section-header span:first-child { color: #e74c3c; }
 .rollover-steps { margin: 10px 0; }
 .rollover-step {
   padding: 4px 0; font-size: 13px; color: var(--mt);
@@ -3140,4 +3748,250 @@ input[type="range"]::-webkit-slider-runnable-track {
 @media (max-width: 768px) {
   .bracket-rounds { flex-direction: column; align-items: stretch; }
   .bracket-round { min-width: auto; }
+}
+
+/* ===== Legal Pages (Terms / Privacy) ===== */
+.legal-page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 40px 24px 60px;
+}
+.legal-page h2 {
+  font-family: 'Dela Gothic One', sans-serif;
+  font-size: 24px;
+  color: var(--ac);
+  margin-bottom: 4px;
+}
+.legal-updated {
+  font-size: 12px;
+  color: var(--mt);
+  margin-bottom: 28px;
+}
+.legal-body h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gd);
+  margin: 22px 0 8px;
+  letter-spacing: 0.3px;
+}
+.legal-body p {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--tx);
+  margin-bottom: 10px;
+}
+.legal-body strong {
+  color: var(--wh);
+}
+
+@media (max-width: 480px) {
+  .legal-page { padding: 24px 16px 40px; }
+  .legal-page h2 { font-size: 20px; }
+}
+
+/* ===== Profile Dropdown Menu ===== */
+.profile-menu-wrap { position: relative; }
+.profile-menu {
+  display: none;
+  position: absolute;
+  top: 42px;
+  right: 0;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  min-width: 180px;
+  z-index: 200;
+  overflow: hidden;
+}
+.profile-menu.open { display: block; }
+.profile-menu-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--bd);
+}
+.profile-menu-header .pm-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wh);
+}
+.profile-menu-header .pm-email {
+  font-size: 11px;
+  color: var(--mt);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-menu-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 11px 16px;
+  color: var(--tx);
+  font-size: 13px;
+  font-family: 'Outfit', sans-serif;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.profile-menu-item:hover { background: rgba(255,255,255,0.04); }
+.profile-menu-item.danger { color: #e74c3c; }
+.profile-menu-divider { height: 1px; background: var(--bd); margin: 4px 0; }
+
+/* ===== Admin Dropdown in Nav ===== */
+.admin-dropdown-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.admin-dropdown-btn {
+  padding: 11px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--gd);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+  white-space: nowrap;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.admin-dropdown-btn:hover { color: #19d0d0; }
+.admin-dropdown-btn.active {
+  color: var(--gd);
+  border-bottom-color: var(--gd);
+}
+.admin-dropdown-btn .admin-caret {
+  font-size: 8px;
+  transition: transform 0.2s;
+}
+.admin-dropdown-btn.open .admin-caret { transform: rotate(180deg); }
+.admin-dropdown-menu {
+  display: none;
+  position: fixed;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  min-width: 140px;
+  z-index: 200;
+  overflow: hidden;
+}
+.admin-dropdown-menu.open { display: block; }
+.admin-dropdown-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 10px 16px;
+  color: var(--gd);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Outfit', sans-serif;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.admin-dropdown-item:hover { background: rgba(255,255,255,0.04); }
+.admin-dropdown-item.active { color: #19d0d0; background: rgba(20,160,160,0.08); }
+
+/* ===== League Select Improvements ===== */
+.league-card-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  letter-spacing: -0.5px;
+}
+.league-card-meta {
+  font-size: 11px;
+  color: var(--mt);
+  margin-top: 2px;
+}
+
+/* ===== Schedule Collapse ===== */
+.schedule-week-card.collapsed-week .schedule-matchups { display: none; }
+.schedule-week-card .schedule-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--mt);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: 'Outfit', sans-serif;
+  transition: all 0.15s;
+}
+.schedule-week-card .schedule-toggle-btn:hover { color: var(--tx); background: rgba(255,255,255,0.04); }
+.schedule-jump-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 6px;
+  margin-bottom: 4px;
+}
+.schedule-jump-btn {
+  background: var(--al);
+  border: 1px solid var(--bd);
+  border-radius: 50px;
+  color: var(--gd);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+  transition: all 0.15s;
+}
+.schedule-jump-btn:hover { border-color: var(--gd); color: var(--wh); }
+
+/* ===== Score Card Player Names ===== */
+.match-team-players {
+  font-size: 11px;
+  color: var(--mt);
+  margin-top: 2px;
+}
+
+/* ===== Landing Page Responsive ===== */
+@media (max-width: 768px) {
+  .landing-features-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+  }
+  .landing-steps {
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  .landing-step { max-width: 320px; padding: 0 16px; }
+  .landing-step-connector {
+    width: 2px;
+    height: 24px;
+    margin: 0;
+  }
+  .landing-features { padding: 60px 20px; }
+  .landing-how { padding: 48px 20px 60px; }
+  .landing-cta { padding: 60px 20px; }
+}
+
+@media (max-width: 480px) {
+  .landing-features-grid {
+    grid-template-columns: 1fr;
+  }
+  .splash-title { font-size: 28px; }
+  .landing-headline { font-size: 18px; }
+  .landing-section-title { font-size: 18px; margin-bottom: 32px; }
+  .landing-cta h2 { font-size: 22px; }
+  .landing-feature-card { padding: 24px 20px; }
 }

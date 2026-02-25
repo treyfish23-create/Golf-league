@@ -14,7 +14,7 @@
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js';
 import { getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, increment } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, sendEmailVerification, updateProfile } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js';
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-storage.js';
 
 const firebaseConfig = {
@@ -48,6 +48,9 @@ if (!app) {
     createUserWithEmailAndPassword,
     signOut,
     onAuthStateChanged,
+    sendPasswordResetEmail,
+    sendEmailVerification,
+    updateProfile,
     getDoc, getDocs, setDoc, updateDoc, deleteDoc,
     onSnapshot, query, where, orderBy, doc, collection, increment,
     db, auth, storage,
@@ -94,5 +97,6 @@ export function userRef(uid) {
 // ===== Auth helpers =====
 export { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword,
          createUserWithEmailAndPassword, signOut, onAuthStateChanged,
+         sendPasswordResetEmail, sendEmailVerification, updateProfile,
          getDoc, getDocs, setDoc, updateDoc, deleteDoc,
          onSnapshot, query, where, orderBy, doc, collection, increment };
