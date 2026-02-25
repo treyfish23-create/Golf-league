@@ -3,26 +3,58 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <title>GolfLeague — Manage Your Golf League</title>
+  <title>FairwayCaddie — Manage Your Golf League</title>
   <meta name="description" content="Free golf league management app. Create teams, track scores, handicaps, standings, skins, and more. Built for weekly 9-hole match play leagues." />
   <meta name="theme-color" content="#0d1f14" />
 
   <!-- Open Graph / Social -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="GolfLeague — Manage Your Golf League" />
+  <meta property="og:url" content="https://fairwaycaddie.com/" />
+  <meta property="og:title" content="FairwayCaddie — Manage Your Golf League" />
   <meta property="og:description" content="Free golf league management. Teams, scores, handicaps, standings, skins & more." />
-  <meta property="og:image" content="/og-image.png" />
+  <meta property="og:image" content="https://fairwaycaddie.com/og-image.png" />
   <meta name="twitter:card" content="summary_large_image" />
+  <link rel="canonical" href="https://fairwaycaddie.com/" />
 
-  <!-- Favicon -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>" />
-  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>" />
+  <!-- Favicon & PWA -->
+  <link rel="icon" href="/icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+  <!-- Sentry Error Tracking -->
+  <script src="https://browser.sentry-cdn.com/8.49.0/bundle.min.js" crossorigin="anonymous"></script>
+  <script>
+    if (window.Sentry) {
+      Sentry.init({
+        dsn: "YOUR_SENTRY_DSN_HERE",  // TODO: Replace with real DSN from sentry.io
+        environment: location.hostname === 'localhost' ? 'development' : 'production',
+        release: "fairwaycaddie@1.0.0",
+        tracesSampleRate: 0.2,
+        sampleRate: 1.0,
+        ignoreErrors: [
+          /^ResizeObserver loop/,
+          /^Non-Error promise rejection/,
+          /quota-exceeded/,
+          /Failed to get document because the client is offline/,
+          /blocked by client/i,
+        ],
+        beforeBreadcrumb(breadcrumb) {
+          if (breadcrumb.category === 'console' && breadcrumb.level === 'log') return null;
+          return breadcrumb;
+        },
+      });
+    }
+  </script>
 
   <link rel="stylesheet" href="styles.css?v=5" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Dela+Gothic+One&display=swap" rel="stylesheet" />
 </head>
 <body>
+<a href="#tab-dashboard" class="skip-link">Skip to content</a>
+<div id="offline-banner" role="alert">You're offline — scores will sync when reconnected</div>
 
 <!-- ===== LANDING PAGE ===== -->
 <section id="view-splash" class="view active">
@@ -31,15 +63,15 @@
   <div class="landing-hero">
     <div class="splash-bg-overlay"></div>
     <div class="landing-hero-content">
-      <div class="splash-icon">⛳</div>
-      <h1 class="splash-title">Golf<span>League</span></h1>
-      <p class="landing-headline">The easiest way to run your golf league</p>
-      <p class="landing-sub">Match play scoring, handicaps, standings, skins — all in one place.</p>
+      <div class="splash-icon"><img src="/logo.png" alt="FairwayCaddie" class="hero-logo" /></div>
+      <h1 class="splash-title sr-only">FairwayCaddie</h1>
+      <p class="hero-slogan-line1">Built for League Night.</p>
+      <p class="hero-slogan-line2">Because Golf League Rules.</p>
       <div id="splash-btns" class="splash-cta-group" style="display:none">
         <button class="btn-primary" id="btn-create-league">Get Started Free</button>
         <button class="btn-secondary" id="btn-sign-in">Sign In</button>
       </div>
-      <div id="splash-loading" style="color:var(--mt);font-size:13px;margin-top:16px;">Checking in…</div>
+      <div id="splash-loading" style="margin-top:16px;display:flex;align-items:center;gap:8px;justify-content:center"><span class="spinner" style="width:14px;height:14px;color:var(--gd)"></span><span style="color:var(--mt);font-size:13px">Checking in…</span></div>
     </div>
     <div class="landing-scroll-hint" onclick="document.querySelector('.landing-features').scrollIntoView({behavior:'smooth'})">
       <span>See what's inside</span>
@@ -52,36 +84,56 @@
     <h2 class="landing-section-title">Everything your league needs</h2>
     <div class="landing-features-grid">
       <div class="landing-feature-card">
-        <div class="feature-icon">📊</div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
+        </div>
         <h3>Live Standings</h3>
         <p>Points, wins, losses, and team rankings update automatically after every match.</p>
       </div>
       <div class="landing-feature-card">
-        <div class="feature-icon">🏌️</div>
-        <h3>Match Play Scoring</h3>
-        <p>Enter scores hole-by-hole. Net strokes, match points, and bonuses calculated instantly.</p>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
+        </div>
+        <h3>Flexible Scoring</h3>
+        <p>Match play, stroke play, Stableford — pick your format. Configure points, net vs. gross, bonuses, and skins to fit your league exactly.</p>
       </div>
       <div class="landing-feature-card">
-        <div class="feature-icon">📈</div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+        </div>
         <h3>Handicap Tracking</h3>
         <p>Rolling handicaps auto-calculated from recent rounds. Manual adjustments available.</p>
       </div>
       <div class="landing-feature-card">
-        <div class="feature-icon">📅</div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </div>
         <h3>Season Schedule</h3>
         <p>Full schedule with tee times, matchups, front/back nines, and playoff brackets.</p>
       </div>
       <div class="landing-feature-card">
-        <div class="feature-icon">💰</div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        </div>
         <h3>Skins Game</h3>
         <p>Optional skins pot tracked alongside match play. Gross or net — your call.</p>
       </div>
       <div class="landing-feature-card">
-        <div class="feature-icon">📱</div>
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18" stroke-width="3"/></svg>
+        </div>
         <h3>Mobile First</h3>
         <p>Enter scores from the course on any phone. Works offline-ready as a web app.</p>
       </div>
     </div>
+  </div>
+
+  <!-- FEATURE REQUEST CALLOUT -->
+  <div class="landing-custom-callout">
+    <div class="custom-callout-tag">Custom Builds</div>
+    <h3 class="custom-callout-heading">Run your league different?</h3>
+    <p class="custom-callout-body">Got a format or rule we don't support yet? Let us know — we can build it and turn it around in 24 hours.</p>
+    <a href="mailto:trey.fish23@gmail.com?subject=FairwayCaddie Feature Request" class="custom-callout-btn">Request a Feature →</a>
   </div>
 
   <!-- HOW IT WORKS -->
@@ -110,7 +162,7 @@
 
   <!-- BOTTOM CTA -->
   <div class="landing-cta">
-    <h2>Ready to tee off?</h2>
+    <h2>⛳ Ready to tee off?</h2>
     <p>Free to create. Free to play.</p>
     <button class="btn-primary" onclick="document.getElementById('btn-create-league').click()">Create Your League</button>
     <button class="btn-text" onclick="document.getElementById('btn-sign-in').click()" style="display:block;margin:12px auto 0;color:var(--mt)">Already have an account? Sign In</button>
@@ -118,7 +170,7 @@
 
   <!-- FOOTER -->
   <div class="landing-footer">
-    <div class="splash-title" style="font-size:18px">Golf<span>League</span></div>
+    <div class="splash-title" style="font-size:18px">Fairway<span>Caddie</span></div>
     <div class="landing-footer-links">
       <button class="btn-text" onclick="showView('terms')">Terms of Service</button>
       <span style="color:var(--mt)">·</span>
@@ -833,9 +885,9 @@
 <section id="view-app" class="view">
 
   <!-- Header -->
-  <div class="app-header">
+  <div class="app-header" role="banner">
     <div class="app-header-left">
-      <div class="app-logo-icon">⛳</div>
+      <div class="app-logo-icon"><img src="/logo.png" alt="FairwayCaddie" /></div>
       <div class="app-header-titles">
         <h1 id="app-league-name">My League</h1>
         <div class="league-sub" id="app-league-sub">Season 2025</div>
@@ -844,7 +896,7 @@
     <div class="app-header-right">
       <button class="league-switcher-btn" id="btn-switch-league">Leagues</button>
       <div class="profile-menu-wrap">
-        <div class="user-avatar" id="user-avatar" title="Account">👤</div>
+        <div class="user-avatar" id="user-avatar" title="Account" role="button" tabindex="0" aria-label="Account menu" aria-haspopup="true" aria-expanded="false">👤</div>
         <div class="profile-menu" id="profile-menu">
           <div class="profile-menu-header">
             <div class="pm-name" id="pm-name"></div>
@@ -860,7 +912,7 @@
   </div>
 
   <!-- Nav tabs -->
-  <div class="app-nav">
+  <nav class="app-nav" role="navigation" aria-label="League sections">
     <button class="nav-tab active" data-tab="dashboard">My</button>
     <button class="nav-tab" data-tab="scores">Scores</button>
     <button class="nav-tab" data-tab="standings">Standings</button>
@@ -872,7 +924,7 @@
     <button class="nav-tab" data-tab="rules">Rules</button>
     <button class="nav-tab" data-tab="history">History</button>
     <div class="admin-dropdown-wrap" id="admin-dropdown-wrap" style="display:none">
-      <button class="admin-dropdown-btn" id="admin-dropdown-btn" onclick="toggleAdminDropdown()">
+      <button class="admin-dropdown-btn" id="admin-dropdown-btn" onclick="toggleAdminDropdown()" aria-label="Admin menu" aria-haspopup="true" aria-expanded="false">
         Admin <span class="admin-caret">▾</span>
       </button>
       <div class="admin-dropdown-menu" id="admin-dropdown-menu">
@@ -882,10 +934,10 @@
         <button class="admin-dropdown-item" data-tab="admin-settings" onclick="adminNavTo('admin-settings')">Settings</button>
       </div>
     </div>
-  </div>
+  </nav>
 
   <!-- Content -->
-  <div class="app-content">
+  <div class="app-content" role="main">
     <div id="tab-dashboard"      class="app-tab active"></div>
     <div id="tab-scores"         class="app-tab"></div>
     <div id="tab-standings"      class="app-tab"></div>
@@ -905,7 +957,7 @@
 </section>
 
 <!-- ===== TOAST ===== -->
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <!-- ===== SCORE ENTRY MODAL ===== -->
 <!-- Course Request Modal -->
@@ -1005,10 +1057,10 @@
     <p class="legal-updated">Last updated: February 24, 2026</p>
     <div class="legal-body">
       <h3>1. Acceptance of Terms</h3>
-      <p>By creating an account or using GolfLeague ("the Service"), you agree to these Terms of Service. If you do not agree, do not use the Service.</p>
+      <p>By creating an account or using FairwayCaddie ("the Service"), you agree to these Terms of Service. If you do not agree, do not use the Service.</p>
 
       <h3>2. Description of Service</h3>
-      <p>GolfLeague is a free web application for managing recreational golf leagues — including teams, schedules, scores, handicaps, standings, and statistics. The Service is provided "as is" for personal, non-commercial use.</p>
+      <p>FairwayCaddie is a free web application for managing recreational golf leagues — including teams, schedules, scores, handicaps, standings, and statistics. The Service is provided "as is" for personal, non-commercial use.</p>
 
       <h3>3. User Accounts</h3>
       <p>You must provide accurate information when creating an account. You are responsible for maintaining the security of your credentials. You must be at least 13 years old to use the Service.</p>
@@ -1023,13 +1075,13 @@
       <p>The Service is provided free of charge with no guarantee of uptime, accuracy, or availability. We may modify, suspend, or discontinue the Service at any time without notice. We are not liable for any loss of data.</p>
 
       <h3>7. Limitation of Liability</h3>
-      <p>To the maximum extent permitted by law, GolfLeague and its operators shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the Service.</p>
+      <p>To the maximum extent permitted by law, FairwayCaddie and its operators shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the Service.</p>
 
       <h3>8. Changes to Terms</h3>
       <p>We may update these Terms at any time. Continued use of the Service after changes constitutes acceptance of the new Terms.</p>
 
       <h3>9. Contact</h3>
-      <p>Questions about these Terms? Contact us at <strong>support@golfleague.app</strong></p>
+      <p>Questions about these Terms? Contact us at <strong>support@fairwaycaddie.com</strong></p>
     </div>
   </div>
 </section>
@@ -1068,7 +1120,7 @@
       <p>We may update this Privacy Policy at any time. Changes will be posted on this page with an updated date.</p>
 
       <h3>9. Contact</h3>
-      <p>Questions about this Privacy Policy? Contact us at <strong>support@golfleague.app</strong></p>
+      <p>Questions about this Privacy Policy? Contact us at <strong>support@fairwaycaddie.com</strong></p>
     </div>
   </div>
 </section>
@@ -1137,6 +1189,7 @@
     if (loading) loading.style.display = 'none';
     if (user) {
       window._currentUser = user;
+      if (window.Sentry) Sentry.setUser({ id: user.uid, email: user.email });
       // Gate email/password users who haven't verified their email
       // Only enforce for accounts created AFTER verification was enabled
       const VERIFICATION_CUTOFF = new Date('2026-02-24T00:00:00Z').getTime();
@@ -1152,9 +1205,33 @@
       }
     } else {
       window._currentUser = null;
+      if (window.Sentry) Sentry.setUser(null);
       if (btns) btns.style.display = 'flex';
     }
   });
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    // Force iOS to check for a new SW on every page load
+    reg.update();
+    // When a new SW finishes installing, tell it to skip waiting
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+          nw.postMessage({ type: 'SKIP_WAITING' });
+        }
+      });
+    });
+  }).catch(e => console.warn('[SW]', e));
+  // When the new SW takes control, reload once to get fresh assets
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!refreshing) { refreshing = true; window.location.reload(); }
+  });
+}
 </script>
 
 </body>

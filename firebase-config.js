@@ -13,6 +13,7 @@
 // Replace the placeholder values below with your actual config.
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js';
+import { getAnalytics, logEvent as _logEvent, isSupported as analyticsIsSupported } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-analytics.js';
 import { getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, increment } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, sendEmailVerification, updateProfile } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js';
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/12.9.0/firebase-storage.js';
@@ -23,7 +24,8 @@ const firebaseConfig = {
   projectId:         "golf-league-app-c4558",
   storageBucket:     "golf-league-app-c4558.firebasestorage.app",
   messagingSenderId: "847399939050",
-  appId:             "1:847399939050:web:1264ccaa2a8a3e0a61e093"
+  appId:             "1:847399939050:web:1264ccaa2a8a3e0a61e093",
+  measurementId:     "G-9LC1VPMMJS"
 };
 
 // Singleton — only initialize once no matter how many modules import this
@@ -36,6 +38,17 @@ if (!app) {
   window._db      = db;
   window._auth    = auth;
   window._storage = storage;
+
+  // ===== Analytics (ad-blocker resilient) =====
+  let analytics = null;
+  try {
+    analyticsIsSupported().then(supported => {
+      if (supported && firebaseConfig.measurementId && firebaseConfig.measurementId !== 'G-PLACEHOLDER') {
+        analytics = getAnalytics(app);
+        console.log('[Firebase] Analytics initialized');
+      }
+    }).catch(() => {});
+  } catch (e) { /* blocked by ad-blocker, no-op */ }
 
   // Expose all Firebase SDK functions on window._FB immediately
   // so non-module app.js can use them even if firestore-sync.js fails to load.
@@ -55,7 +68,11 @@ if (!app) {
     onSnapshot, query, where, orderBy, doc, collection, increment,
     db, auth, storage,
     storageRef: (path) => storageRef(storage, path),
-    uploadBytes, getDownloadURL
+    uploadBytes, getDownloadURL,
+    logEvent: (name, params) => {
+      try { if (analytics) _logEvent(analytics, name, params); }
+      catch (e) { /* ad-blocker, no-op */ }
+    }
   };
 
   console.log('[Firebase] initialized, window._FB ready');

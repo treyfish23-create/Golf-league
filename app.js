@@ -46,6 +46,7 @@ function navTo(tab) {
   document.querySelectorAll('.nav-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
   });
+  window._FB?.logEvent('page_view', { page_title: tab });
 }
 
 // ===== Toast =====
@@ -431,6 +432,7 @@ async function wizardFinish() {
     });
 
     toast(`${config.leagueName} created! 🎉`, 'success');
+    window._FB?.logEvent('create_league', { league_id: leagueId });
     await loadLeague(leagueId);
 
   } catch (err) {
@@ -2145,16 +2147,20 @@ function calcHcp(rounds, config) {
   return Math.min(Math.max(hcp, 0), maxHcp);
 }
 
-// Handicap with manual adjustment applied (one-week override)
+// Handicap with manual adjustment applied
 function calcHcpAdj(rounds, config, playerId, week) {
   const base = calcHcp(rounds, config);
   const entry = (config?.manualAdj || {})[playerId];
-  // New format: { adj, week }. Old format: plain number (treat as expired/no week)
+  const max = config?.handicap?.max || 18;
+  // New format: { override: N } → lock handicap at this value regardless of calc
+  if (entry && typeof entry === 'object' && 'override' in entry) {
+    return Math.min(Math.max(entry.override, 0), max);
+  }
+  // Legacy format: { adj, week } → apply only for matching week
   let adj = 0;
   if (entry && typeof entry === 'object' && entry.week === week) {
     adj = entry.adj || 0;
   }
-  const max = config?.handicap?.max || 18;
   return Math.min(Math.max(base + adj, 0), max);
 }
 
@@ -2341,7 +2347,23 @@ function calcWeeklySkins(weekNum, allMatches, config) {
 // ---- Dashboard Tab ----
 function renderDashboard() {
   const el = document.getElementById('tab-dashboard');
-  if (!el || !APP.config) return;
+  if (!el) return;
+  if (!APP.config) {
+    el.innerHTML = `
+      <div class="skeleton-card mt-12">
+        <div class="skeleton skeleton-text long"></div>
+        <div class="skeleton skeleton-text medium"></div>
+      </div>
+      <div class="skeleton-card">
+        <div class="skeleton-row"><div class="skeleton skeleton-bar"></div><div class="skeleton skeleton-bar narrow"></div></div>
+        <div class="skeleton-row"><div class="skeleton skeleton-bar"></div><div class="skeleton skeleton-bar narrow"></div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+        <div class="skeleton-card"><div class="skeleton skeleton-text medium" style="height:32px;margin:8px auto"></div><div class="skeleton skeleton-text short" style="margin:0 auto"></div></div>
+        <div class="skeleton-card"><div class="skeleton skeleton-text medium" style="height:32px;margin:8px auto"></div><div class="skeleton skeleton-text short" style="margin:0 auto"></div></div>
+      </div>`;
+    return;
+  }
 
   const myPlayerId = APP.member?.playerId;
   const teams      = APP.config.teams || [];
@@ -2597,7 +2619,14 @@ function renderDashboard() {
 // ---- Standings Tab ----
 function renderStandings() {
   const el = document.getElementById('tab-standings');
-  if (!el || !APP.config) return;
+  if (!el) return;
+  if (!APP.config) {
+    el.innerHTML = `<div class="skeleton-card mt-12">
+      <div class="skeleton skeleton-text medium" style="margin-bottom:16px"></div>
+      ${Array(8).fill('<div class="skeleton-row"><div class="skeleton skeleton-bar narrow"></div><div class="skeleton skeleton-bar"></div><div class="skeleton skeleton-bar narrow"></div><div class="skeleton skeleton-bar narrow"></div></div>').join('')}
+    </div>`;
+    return;
+  }
 
   const teams = APP.config.teams || [];
   const standing = calcStandings(APP.matches, teams);
@@ -2676,9 +2705,12 @@ function renderHandicaps() {
     const rounds = APP.rounds[player.id] || [];
     const calc   = calcHcp(rounds, config);
     const entry  = manAdj[player.id];
-    const adj    = (entry && typeof entry === 'object' && entry.week === displayWeek) ? (entry.adj || 0) : 0;
-    const adjWeek = (entry && typeof entry === 'object') ? entry.week : null;
-    const final  = Math.min(Math.max(calc + adj, 0), config.handicap?.max || 18);
+    const isOverride = entry && typeof entry === 'object' && 'override' in entry;
+    const adj    = isOverride ? 0 : ((entry && typeof entry === 'object' && entry.week === displayWeek) ? (entry.adj || 0) : 0);
+    const adjWeek = isOverride ? null : ((entry && typeof entry === 'object') ? entry.week : null);
+    const final  = isOverride
+      ? Math.min(Math.max(entry.override, 0), config.handicap?.max || 18)
+      : Math.min(Math.max(calc + adj, 0), config.handicap?.max || 18);
     const grossScores = rounds.map(r => r.grossScore || r.score || 0).filter(s => s > 0);
     const lastRound   = grossScores.length ? grossScores[grossScores.length - 1] : null;
     const trend = grossScores.length >= 2 ? grossScores[grossScores.length - 1] - grossScores[grossScores.length - 2] : 0;
@@ -2773,11 +2805,14 @@ function _renderHcpCalc(sortedPlayers, config, displayWeek) {
 
     // Manual adj for current week
     const entry = manAdj[pid];
-    const adj = (entry && typeof entry === 'object' && entry.week === displayWeek) ? (entry.adj || 0) : 0;
+    const isOverride = entry && typeof entry === 'object' && 'override' in entry;
+    const adj = isOverride ? 0 : ((entry && typeof entry === 'object' && entry.week === displayWeek) ? (entry.adj || 0) : 0);
 
     // calcHcp result
     const calcVal = calcHcp(rounds, config);
-    const finalVal = Math.min(Math.max(calcVal + adj, 0), maxHcp);
+    const finalVal = isOverride
+      ? Math.min(Math.max(entry.override, 0), maxHcp)
+      : Math.min(Math.max(calcVal + adj, 0), maxHcp);
 
     let html = '<div class="hcp-calc-breakdown">';
 
@@ -3724,32 +3759,41 @@ function renderAdminScores() {
     if (!items.length) return '';
     // Sort by week
     items.sort(([, a], [, b]) => (a.week || 0) - (b.week || 0));
+    // Build cards with week separator headers
+    let lastWeek = null;
+    const cardsHtml = items.map(([key, m]) => {
+      let sep = '';
+      if (m.week !== lastWeek) {
+        sep = `<div class="admin-week-separator">Week ${m.week}</div>`;
+        lastWeek = m.week;
+      }
+      return sep + `
+        <div class="match-card admin-match-card">
+          <div class="match-card-teams">
+            <div class="match-team-block">
+              <span class="match-team-name">${m.team1Name || 'Team 1'}</span>
+              ${m.result ? `<span class="match-team-pts">${m.result.pts1 ?? ''}</span>` : ''}
+            </div>
+            <span class="match-vs">vs</span>
+            <div class="match-team-block right">
+              <span class="match-team-name">${m.team2Name || 'Team 2'}</span>
+              ${m.result ? `<span class="match-team-pts">${m.result.pts2 ?? ''}</span>` : ''}
+            </div>
+          </div>
+          <div class="match-card-footer">
+            <span class="chip chip-${m.status}">${_statusLabel(m.status)}</span>
+            <span class="admin-match-meta">${m.date ? _fmtDate(m.date) : ''} · ${(m.nine || 'front') === 'front' ? 'F9' : 'B9'}</span>
+            ${m.forceCommitted ? '<span class="chip chip-force">Force</span>' : ''}
+          </div>
+          <div class="admin-match-actions">
+            ${actions(key, m)}
+          </div>
+        </div>`;
+    }).join('');
     return `
       <div class="admin-section">
         <div class="admin-section-title">${icon ? icon + ' ' : ''}${title} (${items.length})</div>
-        ${items.map(([key, m]) => `
-          <div class="match-card admin-match-card">
-            <div class="match-card-teams">
-              <div class="match-team-block">
-                <span class="match-team-name">${m.team1Name || 'Team 1'}</span>
-                ${m.result ? `<span class="match-team-pts">${m.result.pts1 ?? ''}</span>` : ''}
-              </div>
-              <span class="match-vs">vs</span>
-              <div class="match-team-block right">
-                <span class="match-team-name">${m.team2Name || 'Team 2'}</span>
-                ${m.result ? `<span class="match-team-pts">${m.result.pts2 ?? ''}</span>` : ''}
-              </div>
-            </div>
-            <div class="match-card-footer">
-              <span class="chip chip-${m.status}">${_statusLabel(m.status)}</span>
-              <span class="admin-match-meta">Wk ${m.week} · ${m.date ? _fmtDate(m.date) : ''} · ${(m.nine || 'front') === 'front' ? 'F9' : 'B9'}</span>
-              ${m.forceCommitted ? '<span class="chip chip-force">Force</span>' : ''}
-            </div>
-            <div class="admin-match-actions">
-              ${actions(key, m)}
-            </div>
-          </div>
-        `).join('')}
+        ${cardsHtml}
       </div>`;
   };
 
@@ -3959,6 +4003,11 @@ function renderAdminSettings() {
   const el = document.getElementById('tab-admin-settings');
   if (!el || !APP.config || APP.member?.role !== 'commissioner') return;
 
+  // Preserve which sections are currently open so re-renders don't collapse them
+  const openSections = new Set(
+    Array.from(el.querySelectorAll('.admin-section:not(.collapsed)')).map(s => s.id).filter(Boolean)
+  );
+
   const c = APP.config;
   const hcpConfig = c.handicap || {};
   const fmtConfig = c.format || {};
@@ -4000,27 +4049,23 @@ function renderAdminSettings() {
 
   // Build handicap adjustments table
   const allPlayers = teams.flatMap(t => (t.players || []).map(p => ({ ...p, teamName: t.name })));
-  const totalWeeks = schedule.length || 18;
-  const weekOpts = Array.from({length: totalWeeks}, (_, i) => i + 1);
   const hcpAdjRows = allPlayers.map(p => {
     const rounds = APP.rounds[p.id] || [];
     const calc = calcHcp(rounds, c);
     const entry = manAdj[p.id];
-    const adj = (entry && typeof entry === 'object') ? entry.adj : 0;
-    const adjWeek = (entry && typeof entry === 'object') ? entry.week : '';
-    const final = Math.min(Math.max(calc + adj, 0), hcpConfig.max || 18);
+    const isOverride = entry && typeof entry === 'object' && 'override' in entry;
+    const overrideVal = isOverride ? entry.override : '';
+    const final = isOverride
+      ? Math.min(Math.max(entry.override, 0), hcpConfig.max || 18)
+      : Math.min(Math.max(calc, 0), hcpConfig.max || 18);
     return `
       <tr>
         <td class="hcpadj-name">${p.name}</td>
         <td class="hcpadj-calc">${calc.toFixed(1)}</td>
         <td class="hcpadj-adj">
-          <select class="field field-sm hcpadj-week" data-pid="${p.id}" onchange="adminSetHcpAdj('${p.id}')">
-            <option value="">—</option>
-            ${weekOpts.map(w => `<option value="${w}" ${w === adjWeek ? 'selected' : ''}>W${w}</option>`).join('')}
-          </select>
-          <input type="number" class="field field-sm hcpadj-input" value="${adj || ''}" step="0.5" min="-18" max="18" data-pid="${p.id}" onchange="adminSetHcpAdj('${p.id}')" placeholder="±" />
+          <input type="number" class="field field-sm hcpadj-input" value="${overrideVal}" step="1" min="0" max="${hcpConfig.max || 18}" data-pid="${p.id}" onchange="adminSetHcpAdj('${p.id}')" placeholder="—" title="Set override (blank = use calculated)" />
         </td>
-        <td class="hcpadj-final">${final.toFixed(1)}</td>
+        <td class="hcpadj-final ${isOverride ? 'hcpadj-overridden' : ''}">${final.toFixed(1)}</td>
       </tr>`;
   }).join('');
 
@@ -4114,8 +4159,9 @@ function renderAdminSettings() {
             </div>
             ${seasonDatesRows}
           </div>
-          <div style="padding:10px 0">
-            <button class="btn btn-green btn-sm" onclick="adminSaveSeasonDates()">Save Season Dates</button>
+          <div style="padding:10px 0;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-green btn-sm" onclick="adminSaveSeasonDates()">Save Dates</button>
+            <button class="btn btn-outline btn-sm" onclick="adminAddWeek()">+ Add Week</button>
           </div>
         </div>
       </div>
@@ -4227,10 +4273,10 @@ function renderAdminSettings() {
           <span class="admin-chevron"></span>
         </div>
         <div class="admin-section-body">
-          <p class="admin-help-text">Manual adjustments add/subtract from calculated handicap.</p>
+          <p class="admin-help-text">Type a number to lock a player's handicap to that value. Leave blank to use the calculated handicap.</p>
           <div class="score-table-wrap">
             <table class="hcpadj-table">
-              <thead><tr><th>Player</th><th>Calc</th><th>Adj</th><th>Final</th></tr></thead>
+              <thead><tr><th>Player</th><th>Calc</th><th>Override</th><th>Final</th></tr></thead>
               <tbody>${hcpAdjRows}</tbody>
             </table>
           </div>
@@ -4268,78 +4314,23 @@ function renderAdminSettings() {
       <!-- ═══ GROUP 3: Weekly Management ═══ -->
       <div class="admin-group-label">Weekly Management</div>
 
-      <!-- Mark Players Absent -->
-      <div class="admin-section collapsed" id="as-sec-absent">
-        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-absent')">
-          <span>Mark Players Absent</span>
+      <!-- Change Pairings -->
+      <div class="admin-section collapsed" id="as-sec-pairings">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-pairings')">
+          <span>Change Pairings</span>
           <span class="admin-chevron"></span>
         </div>
         <div class="admin-section-body">
-          <p class="admin-help-text">Mark a player absent for a specific week. Their score will be generated using the Missing Player Rule above.</p>
-          <div class="settings-row" style="display:flex;gap:8px;align-items:flex-end">
-            <div style="flex:1">
-              <label>Week</label>
-              <select class="field" id="as-absent-ovr-week">
-                ${schedule.map(w => `<option value="${w.week}">Week ${w.week}${w.date ? ' — ' + w.date : ''}</option>`).join('')}
-              </select>
-            </div>
-            <div style="flex:1">
-              <label>Player</label>
-              <select class="field" id="as-absent-ovr-player">
-                ${allPlayers.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
-              </select>
-            </div>
-            <button type="button" class="btn btn-green btn-sm" onclick="adminMarkAbsent()">Mark Absent</button>
+          <p class="admin-help-text">Adjust which teams play each other in a specific week.</p>
+          <div class="settings-row">
+            <label>Week</label>
+            <select class="field" id="as-pairings-week" onchange="adminLoadPairings()">
+              ${schedule.map(w => `<option value="${w.week}">Week ${w.week}${w.date ? ' — ' + w.date : ''}</option>`).join('')}
+            </select>
           </div>
-          <div id="as-absent-ovr-list" class="absent-overrides-list">
-            ${_renderAbsentOverrides(c, allPlayers, schedule)}
-          </div>
-        </div>
-      </div>
-
-      <!-- Custom / Makeup Rounds -->
-      <div class="admin-section collapsed" id="as-sec-custom-rounds">
-        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-custom-rounds')">
-          <span>Custom / Makeup Rounds</span>
-          <span class="admin-chevron"></span>
-        </div>
-        <div class="admin-section-body">
-          <p class="admin-help-text">Create one-off matchups for rain makeups, extra weeks, or special events.</p>
-          ${_renderExistingCustomRounds(c)}
-          <div id="custom-round-form" class="custom-round-form">
-            <div class="settings-row">
-              <label>Round Label</label>
-              <input class="field" id="cr-label" placeholder="e.g. May 28 Makeup" />
-            </div>
-            <div class="settings-row">
-              <label>Date</label>
-              <input class="field" type="date" id="cr-date" />
-            </div>
-            <div class="settings-row">
-              <label>Nine</label>
-              <div class="sd-nine-toggle">
-                <button class="btn-xs active" id="cr-nine-front" onclick="crSetNine('front')">Front</button>
-                <button class="btn-xs" id="cr-nine-back" onclick="crSetNine('back')">Back</button>
-              </div>
-            </div>
-            <div id="cr-pairings" class="cr-pairings">
-              <div class="cr-pairing-row" data-idx="0">
-                <select class="field cr-team-select" id="cr-t1-0">
-                  <option value="">Team A</option>
-                  ${(c.teams || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
-                </select>
-                <span class="matchup-vs">vs</span>
-                <select class="field cr-team-select" id="cr-t2-0">
-                  <option value="">Team B</option>
-                  ${(c.teams || []).map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
-                </select>
-                <button class="btn-xs btn-danger" onclick="crRemovePairing(0)" title="Remove">✕</button>
-              </div>
-            </div>
-            <div class="cr-actions">
-              <button class="btn btn-outline btn-sm" onclick="crAddPairing()">+ Add Pairing</button>
-              <button class="btn btn-green btn-sm" onclick="saveCustomRound()">Save Round</button>
-            </div>
+          <div id="as-pairings-editor">${_renderPairingsEditor(schedule[0], teams)}</div>
+          <div style="padding:10px 0">
+            <button class="btn btn-green btn-sm" onclick="adminSavePairings()">Save Pairings</button>
           </div>
         </div>
       </div>
@@ -4449,6 +4440,12 @@ function renderAdminSettings() {
       </div>
     </div>
   `;
+
+  // Restore previously-open sections (prevents collapse on button clicks that re-render)
+  openSections.forEach(id => {
+    const sec = document.getElementById(id);
+    if (sec) sec.classList.remove('collapsed');
+  });
 
   // Show/hide fixed score row based on absent rule
   document.getElementById('as-absent-rule')?.addEventListener('change', (e) => {
@@ -5004,11 +5001,13 @@ async function adminSaveSettings() {
 
   try {
     await window._FB.saveLeagueConfig(updated);
+    APP.config = { ...APP.config, ...updated };
     toast('Settings saved', 'success');
     const titleEl = document.querySelector('.app-header-titles h1');
     if (titleEl && updated.leagueName) titleEl.textContent = updated.leagueName;
     const subEl = document.querySelector('.app-header-titles .season-label');
     if (subEl && updated.seasonYear) subEl.textContent = `Season ${updated.seasonYear}`;
+    updateNavVisibility();
   } catch (err) {
     console.error('[adminSaveSettings]', err);
     toast('Failed to save settings', 'error');
@@ -5085,29 +5084,101 @@ async function adminSaveSeasonDates() {
 }
 
 async function adminSetHcpAdj(playerId) {
-  const weekSel = document.querySelector(`select.hcpadj-week[data-pid="${playerId}"]`);
-  const adjInp  = document.querySelector(`input.hcpadj-input[data-pid="${playerId}"]`);
-  const week = parseInt(weekSel?.value) || 0;
-  const adj  = parseFloat(adjInp?.value) || 0;
+  const adjInp = document.querySelector(`input.hcpadj-input[data-pid="${playerId}"]`);
+  const val = adjInp?.value?.trim();
   const manAdj = APP.config.manualAdj || {};
 
-  if (!week || adj === 0) {
+  if (!val || val === '') {
     delete manAdj[playerId];
   } else {
-    manAdj[playerId] = { adj, week };
+    const override = parseFloat(val);
+    if (isNaN(override)) { toast('Invalid value', 'error'); return; }
+    manAdj[playerId] = { override };
   }
   APP.config.manualAdj = manAdj;
   try {
     await window._FB.saveLeagueConfig({ manualAdj });
-    if (week && adj !== 0) {
-      toast(`Handicap adj ${adj > 0 ? '+' : ''}${adj} for Week ${week}`, 'success');
-    } else {
-      toast('Handicap adjustment cleared', 'success');
-    }
+    toast(val ? `Handicap set to ${val}` : 'Override cleared', 'success');
     renderAdminSettings();
   } catch (err) {
     console.error('[adminSetHcpAdj]', err);
-    toast('Failed to save adjustment', 'error');
+    toast('Failed to save handicap', 'error');
+  }
+}
+
+// ---- Pairings Editor helpers ----
+function _renderPairingsEditor(week, teams) {
+  if (!week) return '<p class="admin-help-text">No weeks in schedule.</p>';
+  const matchups = week.matchups || [];
+  const n = Math.max(matchups.length, Math.ceil((teams.length || 2) / 2));
+  const rows = Array.from({ length: n }, (_, i) => {
+    const [t1, t2] = matchups[i] || ['', ''];
+    return `
+      <div class="cr-pairing-row" data-idx="${i}">
+        <select class="field cr-team-select" id="as-pair-t1-${i}">
+          <option value="">— Team A —</option>
+          ${teams.map(t => `<option value="${t.id}" ${t.id === t1 ? 'selected' : ''}>${t.name}</option>`).join('')}
+        </select>
+        <span class="matchup-vs">vs</span>
+        <select class="field cr-team-select" id="as-pair-t2-${i}">
+          <option value="">— Team B —</option>
+          ${teams.map(t => `<option value="${t.id}" ${t.id === t2 ? 'selected' : ''}>${t.name}</option>`).join('')}
+        </select>
+      </div>`;
+  }).join('');
+  return `<div class="cr-pairings" id="as-pairings-rows" style="margin-top:8px">${rows}</div>`;
+}
+
+function adminLoadPairings() {
+  const weekNum = parseInt(document.getElementById('as-pairings-week')?.value) || 0;
+  const week = (APP.config.schedule || []).find(w => w.week === weekNum);
+  const teams = APP.config.teams || [];
+  const editor = document.getElementById('as-pairings-editor');
+  if (editor) editor.innerHTML = _renderPairingsEditor(week, teams);
+}
+
+async function adminSavePairings() {
+  const weekNum = parseInt(document.getElementById('as-pairings-week')?.value) || 0;
+  const schedule = APP.config.schedule || [];
+  const weekEntry = schedule.find(w => w.week === weekNum);
+  if (!weekEntry) { toast('Week not found', 'error'); return; }
+
+  const rows = document.querySelectorAll('#as-pairings-rows .cr-pairing-row');
+  const matchups = [];
+  for (const row of rows) {
+    const i = row.dataset.idx;
+    const t1 = document.getElementById(`as-pair-t1-${i}`)?.value;
+    const t2 = document.getElementById(`as-pair-t2-${i}`)?.value;
+    if (t1 && t2 && t1 !== t2) matchups.push([t1, t2]);
+  }
+  if (!matchups.length) { toast('No valid pairings entered', 'error'); return; }
+
+  weekEntry.matchups = matchups;
+  try {
+    await window._FB.saveLeagueConfig({ schedule });
+    toast(`Week ${weekNum} pairings saved`, 'success');
+  } catch (err) {
+    console.error('[adminSavePairings]', err);
+    toast('Failed to save pairings', 'error');
+  }
+}
+
+async function adminAddWeek() {
+  const schedule = APP.config.schedule || [];
+  const maxWeek = schedule.reduce((m, w) => Math.max(m, w.week || 0), 0);
+  const newWeek = maxWeek + 1;
+  const lastEntry = schedule[schedule.length - 1];
+  // Alternate nine from last week
+  const nine = lastEntry?.nine === 'front' ? 'back' : 'front';
+  schedule.push({ week: newWeek, date: '', nine, matchups: [] });
+  APP.config.schedule = schedule;
+  try {
+    await window._FB.saveLeagueConfig({ schedule });
+    toast(`Week ${newWeek} added`, 'success');
+    renderAdminSettings();
+  } catch (err) {
+    console.error('[adminAddWeek]', err);
+    toast('Failed to add week', 'error');
   }
 }
 
@@ -5150,8 +5221,12 @@ window.adminSaveSettings     = adminSaveSettings;
 window.adminSetNine          = adminSetNine;
 window.adminToggleHcpWeek    = adminToggleHcpWeek;
 window.adminToggleCancelWeek = adminToggleCancelWeek;
+window.adminTogglePlayoffWeek = adminTogglePlayoffWeek;
 window.adminSaveSeasonDates  = adminSaveSeasonDates;
 window.adminSetHcpAdj        = adminSetHcpAdj;
+window.adminAddWeek          = adminAddWeek;
+window.adminLoadPairings     = adminLoadPairings;
+window.adminSavePairings     = adminSavePairings;
 window.adminExportData       = adminExportData;
 window.adminExportScoresCSV  = adminExportScoresCSV;
 window.crSetNine             = crSetNine;
@@ -5857,10 +5932,11 @@ function openMatch(matchKey) {
     });
   }
 
-  // Editing permitted? Disputed/escalated matches can be edited by submitter team too
+  // Editing permitted? Disputed/escalated: only the SUBMITTING team (or commissioner) can edit
+  const myTeamId   = _getMyTeamId(match);
+  const isSubmitter = !match.submittedByTeam || myTeamId === match.submittedByTeam;
   const canEdit = (status === 'draft' && (_canEnterScores(match, uid) || isCommish)) ||
-                  ((status === 'disputed' || status === 'escalated') && (_canEnterScores(match, uid) || isCommish)) ||
-                  (isCommish); // commissioner can always edit
+                  ((status === 'disputed' || status === 'escalated') && ((isSubmitter && _canEnterScores(match, uid)) || isCommish));
 
   // Populate modal header
   document.getElementById('modal-week-badge').textContent = `Week ${match.week || '?'}`;
@@ -6259,17 +6335,7 @@ function _renderModalFooter(status, match, uid, isCommish,
     return;
   }
 
-  if ((status === 'disputed' || status === 'escalated') && canEnter) {
-    footer.innerHTML = `
-      ${disputeHistoryHtml}
-      <button class="btn-modal-submit" onclick="handleSubmitScores()">
-        Re-Submit Scores →
-      </button>
-      <p class="modal-footer-hint">Review and fix scores, then re-submit for approval</p>
-    `;
-    return;
-  }
-
+  // Approving team check BEFORE canEnter — otherwise canEnter swallows both teams
   if ((status === 'disputed' || status === 'escalated') && canApprove) {
     footer.innerHTML = `
       ${disputeHistoryHtml}
@@ -6278,6 +6344,17 @@ function _renderModalFooter(status, match, uid, isCommish,
         <button class="btn-modal-approve" onclick="handleApproveScores()">✓ Approve & Lock</button>
       </div>
       ${status === 'escalated' ? '<p class="modal-footer-hint" style="color:#e74c3c">⚡ Commissioner can force-commit this match</p>' : ''}
+    `;
+    return;
+  }
+
+  if ((status === 'disputed' || status === 'escalated') && canEnter) {
+    footer.innerHTML = `
+      ${disputeHistoryHtml}
+      <button class="btn-modal-submit" onclick="handleSubmitScores()">
+        Re-Submit Scores →
+      </button>
+      <p class="modal-footer-hint">Review and fix scores, then re-submit for approval</p>
     `;
     return;
   }
@@ -6323,9 +6400,11 @@ async function handleSubmitScores() {
     await _commitScoresToPlayerRounds(liveScores, match);
 
     toast('Scores submitted! Waiting for opponent to approve.', 'success');
+    window._FB?.logEvent('enter_scores', { match_key: _modalMatchKey });
     closeMatchModal();
   } catch (err) {
     console.error('[submitScores]', err);
+    if (window.Sentry) Sentry.captureException(err, { tags: { action: 'submitScores', matchKey: _modalMatchKey } });
     toast('Error submitting — check console', 'error');
     if (btn) { btn.textContent = 'Submit Scores for Approval →'; btn.disabled = false; }
   }
@@ -6396,6 +6475,7 @@ async function handleApproveScores() {
     closeMatchModal();
   } catch (err) {
     console.error('[approveScores]', err);
+    if (window.Sentry) Sentry.captureException(err, { tags: { action: 'approveScores', matchKey: _modalMatchKey } });
     toast('Error approving — check console', 'error');
     if (btn) { btn.textContent = '✓ Approve & Lock'; btn.disabled = false; }
   }
@@ -6485,7 +6565,14 @@ async function _commitScoresToPlayerRounds(scores, match) {
     const grossScore = holeScores.reduce((a, b) => a + (parseInt(b) || 0), 0);
     if (!grossScore) continue;
     const existing = (APP.rounds[playerId] || []).slice();
-    existing.push({ date, grossScore, score: grossScore, matchKey: _modalMatchKey, nine });
+    // Replace existing round for this match (re-submits shouldn't create duplicates)
+    const idx = existing.findIndex(r => r.matchKey === _modalMatchKey);
+    const roundEntry = { date, grossScore, score: grossScore, matchKey: _modalMatchKey, nine };
+    if (idx >= 0) {
+      existing[idx] = roundEntry;
+    } else {
+      existing.push(roundEntry);
+    }
     await window._FB.savePlayerRounds(playerId, existing);
   }
 }
@@ -6565,6 +6652,9 @@ async function loadLeague(leagueId) {
   const adminWrap = document.getElementById('admin-dropdown-wrap');
   if (adminWrap) adminWrap.style.display = isCommissioner ? '' : 'none';
 
+  // Show/hide nav tabs based on league config
+  updateNavVisibility();
+
   // Populate profile menu
   const user = APP.user || window._currentUser;
   const pmName = document.getElementById('pm-name');
@@ -6582,6 +6672,12 @@ async function loadLeague(leagueId) {
   }
 }
 
+function updateNavVisibility() {
+  const skinsEnabled = APP.config?.format?.skinsEnabled ?? true;
+  const skinsTab = document.querySelector('.nav-tab[data-tab="skins"]');
+  if (skinsTab) skinsTab.style.display = skinsEnabled ? '' : 'none';
+}
+
 function refreshApp() {
   renderDashboard();
   renderScores();
@@ -6593,6 +6689,7 @@ function refreshApp() {
   renderRules();
   renderRecap();
   renderHistory();
+  updateNavVisibility();
   if (APP.member?.role === 'commissioner') {
     renderAdminMembers();
     renderAdminScores();
@@ -6701,6 +6798,7 @@ async function handleJoinLeague() {
       toast(`Already in ${league.name} — loading`, 'success');
     } else {
       toast(`Joined ${league.name}!`, 'success');
+      window._FB?.logEvent('join_league', { league_id: league.id });
     }
     // Auto-load the league either way
     await loadLeague(league.id);
@@ -6738,6 +6836,7 @@ async function handleGoogleSignIn() {
   const provider = new GoogleAuthProvider();
   try {
     const result = await signInWithPopup(getAuth(), provider);
+    window._FB?.logEvent('login', { method: 'google' });
     await onUserSignedIn(result.user);
   } catch (err) {
     console.error(err);
@@ -6753,6 +6852,7 @@ async function handleEmailSignIn(e) {
   const { signInWithEmailAndPassword, getAuth } = window._FB;
   try {
     const result = await signInWithEmailAndPassword(getAuth(), email, pass);
+    window._FB?.logEvent('login', { method: 'email' });
     await onUserSignedIn(result.user);
   } catch (err) {
     toast(friendlyAuthError(err.code), 'error');
@@ -6773,6 +6873,7 @@ async function handleEmailSignUp(e) {
     // Set display name on Firebase auth profile
     await updateProfile(result.user, { displayName: name });
     await saveUserProfile(result.user.uid, { displayName: name, email, createdAt: Date.now() });
+    window._FB?.logEvent('sign_up', { method: 'email' });
     // Send email verification
     try {
       await sendEmailVerification(result.user);
@@ -6911,6 +7012,7 @@ function toggleAdminDropdown() {
   if (!menu) return;
   const isOpen = menu.classList.toggle('open');
   btn?.classList.toggle('open', isOpen);
+  btn?.setAttribute('aria-expanded', String(isOpen));
   if (isOpen) {
     // Position fixed menu relative to the button
     const rect = btn.getBoundingClientRect();
@@ -6955,13 +7057,16 @@ function adminNavTo(tab) {
 
 function toggleProfileMenu() {
   const menu = document.getElementById('profile-menu');
+  const avatar = document.getElementById('user-avatar');
   if (!menu) return;
   const isOpen = menu.classList.toggle('open');
+  avatar?.setAttribute('aria-expanded', String(isOpen));
   if (isOpen) {
     setTimeout(() => {
       const handler = (e) => {
         if (!e.target.closest('.profile-menu-wrap')) {
           menu.classList.remove('open');
+          avatar?.setAttribute('aria-expanded', 'false');
           document.removeEventListener('click', handler);
         }
       };
@@ -6988,6 +7093,23 @@ document.addEventListener('DOMContentLoaded', () => {
   fixDateTimeInputs();
   new MutationObserver(() => fixDateTimeInputs())
     .observe(document.body, { childList: true, subtree: true });
+
+  // ===== Offline / Online Detection =====
+  const offlineBanner = document.getElementById('offline-banner');
+  function updateOnlineStatus() {
+    if (!navigator.onLine) {
+      offlineBanner?.classList.add('visible');
+    } else {
+      offlineBanner?.classList.remove('visible');
+      // Show "back online" toast only if banner was previously visible
+      if (offlineBanner?._wasOffline) toast('Back online ✓', 'success', 2500);
+    }
+    if (offlineBanner) offlineBanner._wasOffline = !navigator.onLine;
+  }
+  window.addEventListener('online', updateOnlineStatus);
+  window.addEventListener('offline', updateOnlineStatus);
+  // Check initial state
+  if (!navigator.onLine) offlineBanner?.classList.add('visible');
 
   showView('splash');
   initToggleGroups();
@@ -7044,6 +7166,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // App header
   document.getElementById('btn-switch-league')?.addEventListener('click', showLeagueSelect);
   document.getElementById('user-avatar')?.addEventListener('click', toggleProfileMenu);
+  document.getElementById('user-avatar')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleProfileMenu(); }
+  });
 
   // Wizard step 6: re-render schedule if user goes back/forward
   // (handled by wizardNext collecting data and renderScheduleWeeks on wizard init)

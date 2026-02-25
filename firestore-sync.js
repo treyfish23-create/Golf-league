@@ -37,6 +37,24 @@ function _teardownListeners() {
   _listeners = [];
 }
 
+// ===== Retry utility for critical writes =====
+async function _retryWrite(fn, label = 'write', maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      console.warn(`[Firestore] ${label} attempt ${i + 1} failed:`, err.message);
+      if (i === maxRetries - 1) {
+        console.error(`[Firestore] ${label} failed after ${maxRetries} attempts`);
+        if (typeof window.toast === 'function') window.toast('Save failed — check your connection', 'error', 5000);
+        throw err;
+      }
+      // Exponential backoff: 1s, 2s, 4s
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+    }
+  }
+}
+
 function _track(unsub) {
   _listeners.push({ unsub });
   return unsub;
@@ -203,7 +221,7 @@ export async function loadMatch(matchKey) {
 
 export async function saveMatch(matchKey, data) {
   if (!_leagueId) return;
-  await setDoc(matchRef(_leagueId, matchKey), data, { merge: true });
+  await _retryWrite(() => setDoc(matchRef(_leagueId, matchKey), data, { merge: true }), 'saveMatch');
 }
 
 // Real-time listener for all matches in this league
@@ -213,6 +231,9 @@ export function listenMatches(cb) {
     const matches = {};
     snap.docs.forEach(d => { matches[d.id] = d.data(); });
     cb(matches);
+  }, err => {
+    console.error('[Firestore] listenMatches error:', err);
+    if (typeof window.toast === 'function') window.toast('Sync lost — retrying…', 'error', 4000);
   });
   return _track(unsub);
 }
@@ -227,7 +248,7 @@ export async function loadPlayerRounds(playerId) {
 
 export async function savePlayerRounds(playerId, rounds) {
   if (!_leagueId) return;
-  await setDoc(playerRoundsRef(_leagueId, playerId), { rounds }, { merge: true });
+  await _retryWrite(() => setDoc(playerRoundsRef(_leagueId, playerId), { rounds }, { merge: true }), 'savePlayerRounds');
 }
 
 // Real-time listener for all playerRounds in this league
@@ -239,6 +260,9 @@ export function listenPlayerRounds(cb) {
     const data = {};
     snap.docs.forEach(d => { data[d.id] = d.data().rounds || []; });
     cb(data);
+  }, err => {
+    console.error('[Firestore] listenPlayerRounds error:', err);
+    if (typeof window.toast === 'function') window.toast('Sync lost — retrying…', 'error', 4000);
   });
   return _track(unsub);
 }
@@ -251,6 +275,9 @@ export function listenLeagueConfig(cb) {
     const data = snap.data();
     if (data.schedule) data.schedule = expandScheduleFromFirestore(data.schedule);
     cb(data);
+  }, err => {
+    console.error('[Firestore] listenLeagueConfig error:', err);
+    if (typeof window.toast === 'function') window.toast('Sync lost — retrying…', 'error', 4000);
   });
   return _track(unsub);
 }

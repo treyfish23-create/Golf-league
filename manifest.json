@@ -1,0 +1,14 @@
+{
+  "name": "FairwayCaddie",
+  "short_name": "FairwayCaddie",
+  "description": "Free golf league management — scores, handicaps, standings & more",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c1a0c",
+  "theme_color": "#0d1f14",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

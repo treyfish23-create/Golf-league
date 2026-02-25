@@ -25,14 +25,30 @@ service cloud.firestore {
         && request.auth.token.email == 'tfisherdesigns@gmail.com';
     }
 
-    // League top-level doc: any authenticated user can read (needed for join-code lookup),
-    // authenticated users can write (league creation + join memberCount increment)
+    // ===== Leagues (multi-tenant) =====
     match /leagues/{leagueId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null;
 
-      // Helper: is the requester a member of this league?
-      // (also true during league creation when the league doc itself was just written)
+      // CREATE: any authenticated user (league creation)
+      // Validate: createdBy must be the requester, memberCount starts at 1
+      allow create: if request.auth != null
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.memberCount == 1;
+
+      // UPDATE: commissioner/creator for full updates;
+      // OR any authed user for memberCount increment only (join flow)
+      allow update: if request.auth != null && (
+        isCommissioner() ||
+        isCreator() ||
+        // Join flow: ONLY memberCount changes, increments by exactly 1
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount'])
+          && request.resource.data.memberCount == resource.data.memberCount + 1
+      );
+
+      // DELETE: only creator (if ever needed)
+      allow delete: if request.auth != null && isCreator();
+
+      // ===== Helper functions =====
       function isMember() {
         return request.auth != null &&
           exists(/databases/$(database)/documents/leagues/$(leagueId)/members/$(request.auth.uid));
@@ -44,41 +60,54 @@ service cloud.firestore {
           get(/databases/$(database)/documents/leagues/$(leagueId)/members/$(request.auth.uid)).data.role == 'commissioner';
       }
 
-      // Config: members can read; commissioner OR league creator (writing their own new league) can write
+      function isCreator() {
+        return request.auth != null &&
+          get(/databases/$(database)/documents/leagues/$(leagueId)).data.createdBy == request.auth.uid;
+      }
+
+      // ===== Config: members read; commissioner/creator write =====
       match /config/{doc} {
         allow read: if isMember();
-        // Allow write if commissioner, OR if the league top-level doc was just created by this user
-        // (creation flow: league doc written first, then config — user is not yet a member)
-        allow write: if request.auth != null && (
-          isCommissioner() ||
-          get(/databases/$(database)/documents/leagues/$(leagueId)).data.createdBy == request.auth.uid
-        );
+        allow write: if request.auth != null && (isCommissioner() || isCreator());
       }
 
-      // Members: members can read all; any authed user can read their own doc (join-check);
-      // authenticated users can write (join or commissioner adding players)
+      // ===== Members =====
       match /members/{memberUid} {
         allow read: if isMember() || (request.auth != null && request.auth.uid == memberUid);
-        allow write: if request.auth != null;
+
+        // CREATE: user can only create their own doc
+        // Join flow: must set role='player', uid must match
+        // Creator: can set role='commissioner' on own doc during league creation
+        allow create: if request.auth != null
+          && request.auth.uid == memberUid
+          && request.resource.data.uid == request.auth.uid
+          && (
+            request.resource.data.role == 'player' ||
+            (request.resource.data.role == 'commissioner' && isCreator())
+          );
+
+        // UPDATE own doc: cannot change role (prevents self-promotion)
+        // UPDATE other member's doc: commissioner only
+        allow update: if request.auth != null && (
+          (request.auth.uid == memberUid
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))
+          || isCommissioner()
+        );
+
+        // DELETE: commissioner only (remove member flow)
+        allow delete: if isCommissioner();
       }
 
-      // Matches: members can read, members can write (score entry + seeding)
+      // ===== Matches: members read; members + creator write =====
       match /matches/{matchKey} {
         allow read: if isMember();
-        // Allow write if member, OR if creator (seeding during league creation)
-        allow write: if request.auth != null && (
-          isMember() ||
-          get(/databases/$(database)/documents/leagues/$(leagueId)).data.createdBy == request.auth.uid
-        );
+        allow write: if request.auth != null && (isMember() || isCreator());
       }
 
-      // Player rounds: members can read/write
+      // ===== Player rounds: members read; members + creator write =====
       match /playerRounds/{playerId} {
         allow read: if isMember();
-        allow write: if request.auth != null && (
-          isMember() ||
-          get(/databases/$(database)/documents/leagues/$(leagueId)).data.createdBy == request.auth.uid
-        );
+        allow write: if request.auth != null && (isMember() || isCreator());
       }
     }
   }
