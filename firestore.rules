@@ -98,16 +98,24 @@ service cloud.firestore {
         allow delete: if isCommissioner();
       }
 
-      // ===== Matches: members read; members + creator write =====
+      // ===== Matches =====
+      // Create/delete: commissioner or creator only (schedule setup, admin ops)
+      // Update: any member (score submission, approval, dispute)
       match /matches/{matchKey} {
-        allow read: if isMember();
-        allow write: if request.auth != null && (isMember() || isCreator());
+        allow read:   if isMember();
+        allow create: if isCommissioner() || isCreator();
+        allow update: if isMember();
+        allow delete: if isCommissioner() || isCreator();
       }
 
-      // ===== Player rounds: members read; members + creator write =====
+      // ===== Player rounds =====
+      // Create/update: any member (approval flow writes rounds when committing scores)
+      // Delete: commissioner or creator only (hard reset, season rollover)
       match /playerRounds/{playerId} {
-        allow read: if isMember();
-        allow write: if request.auth != null && (isMember() || isCreator());
+        allow read:   if isMember();
+        allow create: if isMember();
+        allow update: if isMember();
+        allow delete: if isCommissioner() || isCreator();
       }
     }
   }

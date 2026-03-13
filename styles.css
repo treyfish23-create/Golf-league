@@ -118,7 +118,7 @@ a:focus-visible {
 
 .splash-icon {
   line-height: 1;
-  margin-bottom: -72px; /* cancel transparent bottom edge: 34.8% × 240px ≈ 84px, leave ~12px gap */
+  margin-bottom: -72px;
 }
 .hero-logo {
   height: 240px;
@@ -147,15 +147,33 @@ a:focus-visible {
   color: var(--gl);
 }
 
+.hero-type-label {
+  font-family: 'Outfit', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gl);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  margin: 0 0 14px;
+  opacity: 0.7;
+}
+
+.hero-slogans {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .hero-slogan-line1 {
   font-family: 'Outfit', sans-serif;
-  font-size: 15px;
-  font-weight: 500;
+  font-size: clamp(14px, 4.2vw, 19px);
+  font-weight: 600;
   color: var(--gl);
-  letter-spacing: 1.5px;
+  letter-spacing: 4px;
   text-transform: uppercase;
   margin: 0;
   line-height: 1.2;
+  text-align: center;
 }
 
 .hero-slogan-line2 {
@@ -4188,6 +4206,8 @@ input[type="range"]::-webkit-slider-runnable-track {
   .landing-features { padding: 60px 20px; }
   .landing-how { padding: 48px 20px 60px; }
   .landing-cta { padding: 60px 20px; }
+  .landing-custom-callout { padding: 28px 20px; margin: 0 0 48px; }
+  .custom-callout-heading { font-size: 20px; }
 }
 
 @media (max-width: 480px) {
@@ -4199,6 +4219,81 @@ input[type="range"]::-webkit-slider-runnable-track {
   .landing-section-title { font-size: 18px; margin-bottom: 32px; }
   .landing-cta h2 { font-size: 22px; }
   .landing-feature-card { padding: 24px 20px; }
+  .landing-custom-callout { padding: 24px 16px; }
+  .custom-callout-heading { font-size: 18px; }
+}
+
+/* ===== Support Tab ===== */
+.support-wrap {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+.support-card {
+  padding: 28px 24px;
+}
+.support-title {
+  font-family: 'Dela Gothic One', cursive;
+  font-size: 22px;
+  color: var(--tx);
+  margin: 0 0 8px;
+}
+.support-subtitle {
+  font-size: 14px;
+  color: var(--mt);
+  margin: 0 0 24px;
+  line-height: 1.6;
+}
+.support-hint {
+  font-size: 11px;
+  color: var(--mt);
+  margin-top: 12px;
+  text-align: center;
+}
+.sup-submit-btn { width: 100%; margin-top: 4px; justify-content: center; }
+
+/* ===== League Logo (Dashboard) ===== */
+.league-logo-hero {
+  text-align: center;
+  padding: 20px 16px 4px;
+}
+.league-logo-img {
+  max-height: 120px;
+  max-width: 260px;
+  width: auto;
+  object-fit: contain;
+  border-radius: 12px;
+  display: block;
+  margin: 0 auto;
+}
+
+/* ===== League Logo Upload (Admin Settings) ===== */
+.as-logo-preview {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--bd);
+  background: var(--al);
+  display: block;
+  margin-bottom: 8px;
+}
+.as-logo-placeholder {
+  width: 80px;
+  height: 80px;
+  border: 1px dashed var(--bd);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--mt);
+  margin-bottom: 8px;
+}
+.logo-upload-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 /* ===== View Transition Animation ===== */

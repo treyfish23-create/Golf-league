@@ -485,6 +485,15 @@ export async function uploadPlayerPhoto(playerId, file) {
   return await getDownloadURL(ref);
 }
 
+// ===== League Logo Upload =====
+export async function uploadLeagueLogo(file) {
+  if (!_leagueId) return null;
+  const { storageRef, uploadBytes, getDownloadURL } = window._FB;
+  const ref = storageRef(`leagues/${_leagueId}/logo`);
+  await uploadBytes(ref, file);
+  return await getDownloadURL(ref);
+}
+
 // ===== Season Rollover =====
 // Archives current playerRounds into config.scoreHistory, deletes all matches, clears schedule fields.
 export async function archiveAndRollover(seasonYear) {

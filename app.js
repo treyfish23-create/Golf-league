@@ -18,7 +18,7 @@ const APP = {
 
 const VIEWS = ['splash', 'signin', 'signup', 'forgot-password', 'verify-email', 'terms', 'privacy', 'wizard', 'league-select', 'app'];
 const TABS  = ['dashboard', 'scores', 'standings', 'handicaps', 'skins', 'stats', 'schedule',
-               'recap', 'rules', 'history',
+               'recap', 'rules', 'history', 'support',
                'admin-members', 'admin-scores', 'admin-teams', 'admin-settings'];
 
 // ===== View Router =====
@@ -1754,6 +1754,31 @@ function getAbsentScore(playerId, config, currentMatchDate) {
   }
 }
 
+// Synthetic scores for plays_both both-absent case.
+// Uses only real (non-excluded) current-season rounds so absent scores don't compound.
+function _getBothAbsentScores(playerId, absentBothScore) {
+  const realRounds = (APP.rounds?.[playerId] || []).filter(r => !r.excludeHcp && r.grossScore > 0);
+  const par9       = (APP.config?.course?.scorecard?.front || []).reduce((a, h) => a + (h.par || 4), 0) || 35;
+  const holes      = 9;
+
+  function spread(gross) {
+    if (!gross) return new Array(holes).fill(0);
+    const base = Math.floor(gross / holes);
+    const rem  = gross - base * holes;
+    return Array.from({ length: holes }, (_, i) => base + (i < rem ? 1 : 0));
+  }
+
+  if (!realRounds.length) return spread(par9 + 7); // no history — use par+7 fallback
+
+  if (absentBothScore === 'worst_round') {
+    const worst = Math.max(...realRounds.map(r => r.grossScore || 0));
+    return spread(worst);
+  } else { // 'last_round' (default)
+    const last = realRounds[realRounds.length - 1];
+    return spread(last.grossScore || 0);
+  }
+}
+
 // ===== Handicap System Toggle =====
 // Show/hide custom settings when system changes (scratch/manual don't need them)
 function toggleHcpSystemSettings(val) {
@@ -2096,6 +2121,8 @@ function _applySeedHcpsFromHistory(imported) {
 
 // ===== Handicap Engine =====
 function calcHcp(rounds, config) {
+  // Filter out rounds from absent players — those should not affect handicap
+  rounds = (rounds || []).filter(r => !r.excludeHcp);
   const hcpConfig = config?.handicap || {};
   const numRounds = hcpConfig.rounds || 5;
   const factor    = hcpConfig.factor ?? 0.9;
@@ -2604,6 +2631,10 @@ function renderDashboard() {
 
   // --- Assemble ---
   el.innerHTML = `
+    ${config.logoUrl ? `
+    <div class="league-logo-hero">
+      <img src="${config.logoUrl}" class="league-logo-img" alt="${config.leagueName || 'League'} logo">
+    </div>` : ''}
     <div class="dashboard-header">
       <h2>${myPlayer.name}</h2>
       <div class="dashboard-team-label">${myTeam.name} · ${myPlayer.hilo || 'LO'}</div>
@@ -3501,6 +3532,71 @@ async function addChampion() {
 
 window.addChampion = addChampion;
 
+// ---- Support Tab ----
+function renderSupport() {
+  const el = document.getElementById('tab-support');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="support-wrap">
+      <div class="support-card card">
+        <h2 class="support-title">Get Help</h2>
+        <p class="support-subtitle">Have a question, found a bug, or want a new feature? Send us a message and we'll get back to you within 24 hours.</p>
+        <div class="field">
+          <label>Category</label>
+          <select id="sup-category">
+            <option value="Bug Report">Bug Report</option>
+            <option value="Feature Request">Feature Request</option>
+            <option value="Billing">Billing</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Subject</label>
+          <input id="sup-subject" type="text" placeholder="Brief summary…">
+        </div>
+        <div class="field">
+          <label>Message</label>
+          <textarea id="sup-message" rows="5" placeholder="Describe your issue or request in detail…"></textarea>
+        </div>
+        <button class="btn btn-green sup-submit-btn" onclick="submitSupport()">Submit →</button>
+        <p class="support-hint">Tapping Submit will open your email app. We reply within 24 hours.</p>
+      </div>
+    </div>
+  `;
+}
+
+function submitSupport() {
+  const category = document.getElementById('sup-category')?.value || 'Other';
+  const subject  = (document.getElementById('sup-subject')?.value  || '').trim();
+  const message  = (document.getElementById('sup-message')?.value  || '').trim();
+
+  if (!subject) { toast('Please enter a subject', 'error'); return; }
+  if (!message) { toast('Please enter a message', 'error'); return; }
+
+  const userEmail = window._currentUser?.email || '';
+  const userName  = window._currentUser?.displayName || userEmail || 'Unknown user';
+  const leagueId  = APP.leagueId || 'N/A';
+
+  const emailSubject = encodeURIComponent(`[${category}] ${subject}`);
+  const emailBody    = encodeURIComponent(
+    `From: ${userName} (${userEmail})\nLeague: ${leagueId}\n\n${message}`
+  );
+
+  window.location.href = `mailto:trey.fish23@gmail.com?subject=${emailSubject}&body=${emailBody}`;
+
+  toast("Opening your email app — thanks for reaching out! We'll reply within 24 hours.", 'success');
+
+  // Reset form
+  const subjectEl = document.getElementById('sup-subject');
+  const messageEl = document.getElementById('sup-message');
+  const categoryEl = document.getElementById('sup-category');
+  if (subjectEl)  subjectEl.value  = '';
+  if (messageEl)  messageEl.value  = '';
+  if (categoryEl) categoryEl.value = 'Bug Report';
+}
+
+window.submitSupport = submitSupport;
+
 // ---- Skins Tab ----
 function renderSkins() {
   const el = document.getElementById('tab-skins');
@@ -4106,6 +4202,22 @@ function renderAdminSettings() {
             <label>Tee Interval (min)</label>
             <input class="field" type="number" id="as-tee-interval" value="${c.teeInterval || 10}" min="5" max="30" step="1" />
           </div>
+          <div class="settings-row" style="align-items:flex-start">
+            <label>League Logo</label>
+            <div>
+              ${c.logoUrl
+                ? `<img src="${c.logoUrl}" class="as-logo-preview" alt="League logo">`
+                : `<div class="as-logo-placeholder">No logo</div>`}
+              <input type="file" id="as-logo-input" accept="image/*" style="display:none"
+                     onchange="uploadLeagueLogoFromInput()">
+              <div class="logo-upload-actions">
+                <button id="as-logo-upload-btn" class="btn" onclick="document.getElementById('as-logo-input').click()">
+                  ${c.logoUrl ? 'Replace' : 'Upload Logo'}
+                </button>
+                ${c.logoUrl ? `<button class="btn" onclick="removeLeagueLogo()" style="color:var(--er)">Remove</button>` : ''}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -4211,6 +4323,20 @@ function renderAdminSettings() {
           <div class="settings-row" id="as-absent-fixed-row" style="display:${_getAbsentRule(APP.config) === 'fixed_score' ? '' : 'none'}">
             <label>Fixed Score</label>
             <input class="field" type="number" id="as-absent-fixed" value="${fmtConfig.absentFixedScore || 50}" min="30" max="80" />
+          </div>
+          <div class="settings-row" id="as-absent-both-score-row" style="display:${_getAbsentRule(APP.config) === 'plays_both' ? '' : 'none'}">
+            <label>Both Absent — Score</label>
+            <select class="field" id="as-absent-both-score">
+              <option value="last_round"  ${(c.absentBothScore||'last_round')==='last_round'  ? 'selected':''}>Last round</option>
+              <option value="worst_round" ${(c.absentBothScore||'last_round')==='worst_round' ? 'selected':''}>Worst round (current season)</option>
+            </select>
+          </div>
+          <div class="settings-row" id="as-absent-penalty-row" style="display:${_getAbsentRule(APP.config) === 'plays_both' ? '' : 'none'}">
+            <label>Absent Penalty</label>
+            <select class="field" id="as-absent-penalty">
+              <option value=""        ${!c.absentPenalty ? 'selected':''}>None</option>
+              <option value="low_net" ${c.absentPenalty==='low_net' ? 'selected':''}>Opponent gets low net point</option>
+            </select>
           </div>
         </div>
       </div>
@@ -4335,6 +4461,19 @@ function renderAdminSettings() {
         </div>
       </div>
 
+      <!-- Regenerate Schedule -->
+      <div class="admin-section collapsed" id="as-sec-regen">
+        <div class="admin-section-header" onclick="toggleAdminSection('as-sec-regen')">
+          <span>Regenerate Schedule</span>
+          <span class="admin-chevron"></span>
+        </div>
+        <div class="admin-section-body">
+          <p class="admin-help-text">Rebuilds matchups for all regular season weeks using a balanced round-robin rotation — each team faces every other team roughly the same number of times. Dates, nines, and tee times are preserved. Weeks with submitted or committed scores are skipped automatically.</p>
+          <button id="as-regen-schedule-btn" class="btn btn-green btn-sm"
+                  onclick="adminRegenerateSchedule()">Regenerate Pairings</button>
+        </div>
+      </div>
+
       <!-- ═══ GROUP 4: Data & Admin ═══ -->
       <div class="admin-group-label">Data & Admin</div>
 
@@ -4430,7 +4569,7 @@ function renderAdminSettings() {
           <span class="admin-chevron"></span>
         </div>
         <div class="admin-section-body">
-          <p class="admin-help-text">Permanently delete this entire league and all its data. All matches, player records, score history, and settings will be destroyed. All members will lose access. This cannot be undone.</p>
+          <p class="admin-help-text">Permanently delete this entire league and all its data. All matches, player records, score history, and settings will be destroyed. All members will lose access. This cannot be undone. You will be asked to type <strong>DELETE</strong> to confirm.</p>
           <button class="btn btn-danger-solid btn-sm" onclick="adminDeleteLeague()">Delete This League</button>
         </div>
       </div>
@@ -4447,10 +4586,16 @@ function renderAdminSettings() {
     if (sec) sec.classList.remove('collapsed');
   });
 
-  // Show/hide fixed score row based on absent rule
+  // Show/hide fixed score row and plays_both-only rows based on absent rule
   document.getElementById('as-absent-rule')?.addEventListener('change', (e) => {
-    const row = document.getElementById('as-absent-fixed-row');
-    if (row) row.style.display = e.target.value === 'fixed_score' ? '' : 'none';
+    const val  = e.target.value;
+    const row  = document.getElementById('as-absent-fixed-row');
+    if (row) row.style.display = val === 'fixed_score' ? '' : 'none';
+    const isPB = val === 'plays_both';
+    const bothRow    = document.getElementById('as-absent-both-score-row');
+    const penaltyRow = document.getElementById('as-absent-penalty-row');
+    if (bothRow)    bothRow.style.display    = isPB ? '' : 'none';
+    if (penaltyRow) penaltyRow.style.display = isPB ? '' : 'none';
   });
 
   // Handicap system toggle buttons
@@ -4958,6 +5103,39 @@ async function deleteCustomRound(idx) {
   }
 }
 
+// ---- League Logo ----
+async function uploadLeagueLogoFromInput() {
+  const input = document.getElementById('as-logo-input');
+  const file  = input?.files?.[0];
+  if (!file) return;
+  const btn = document.getElementById('as-logo-upload-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const url = await window._FB.uploadLeagueLogo(file);
+    APP.config.logoUrl = url;
+    await window._FB.saveLeagueConfig({ logoUrl: url });
+    toast('Logo uploaded!', 'success');
+    renderAdminSettings();
+    renderDashboard();
+  } catch (err) {
+    console.error('[uploadLeagueLogo]', err);
+    toast('Upload failed — ' + (err.message || 'check console'), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function removeLeagueLogo() {
+  APP.config.logoUrl = null;
+  await window._FB.saveLeagueConfig({ logoUrl: null });
+  toast('Logo removed', 'success');
+  renderAdminSettings();
+  renderDashboard();
+}
+
+window.uploadLeagueLogoFromInput = uploadLeagueLogoFromInput;
+window.removeLeagueLogo = removeLeagueLogo;
+
 async function adminSaveSettings() {
   const updated = {
     leagueName:    document.getElementById('as-league-name')?.value?.trim() || '',
@@ -4981,8 +5159,10 @@ async function adminSaveSettings() {
       birdie:  parseFloat(document.getElementById('as-pv-birdie')?.value) || 0,
       eagle:   parseFloat(document.getElementById('as-pv-eagle')?.value) || 0,
     },
-    absentRule:       document.getElementById('as-absent-rule')?.value || 'blind_avg',
-    absentFixedScore: parseInt(document.getElementById('as-absent-fixed')?.value) || 50,
+    absentRule:        document.getElementById('as-absent-rule')?.value || 'blind_avg',
+    absentFixedScore:  parseInt(document.getElementById('as-absent-fixed')?.value) || 50,
+    absentBothScore:   document.getElementById('as-absent-both-score')?.value || 'last_round',
+    absentPenalty:     document.getElementById('as-absent-penalty')?.value || '',
     format: {
       ...(APP.config.format || {}),
       skinsEnabled:     document.getElementById('as-skins-enabled')?.checked || false,
@@ -5163,6 +5343,89 @@ async function adminSavePairings() {
   }
 }
 
+async function adminRegenerateSchedule() {
+  const teams    = APP.config?.teams    || [];
+  const schedule = APP.config?.schedule || [];
+
+  if (teams.length < 2) { toast('Need at least 2 teams to generate a schedule', 'error'); return; }
+  if (!schedule.length)  { toast('No schedule weeks found', 'error'); return; }
+
+  // Separate regular vs playoff weeks
+  const regularWeeks = schedule.filter(w => !_isPlayoffWeek(w.week));
+
+  // Determine which regular weeks are safe to touch (all matches in draft)
+  const matches = APP.matches || {};
+  function weekIsDraft(weekNum) {
+    return Object.values(matches).every(m =>
+      m.week !== weekNum || m.status === 'draft'
+    );
+  }
+  const toUpdate = regularWeeks.filter(w => weekIsDraft(w.week));
+  const skipped  = regularWeeks.filter(w => !weekIsDraft(w.week));
+
+  if (!toUpdate.length) {
+    toast('All regular season weeks have committed or pending scores — nothing to regenerate', 'error');
+    return;
+  }
+
+  const skipMsg = skipped.length
+    ? ` ${skipped.length} week${skipped.length > 1 ? 's' : ''} with submitted/committed scores will be skipped.`
+    : '';
+  if (!confirm(`Regenerate matchups for ${toUpdate.length} week${toUpdate.length > 1 ? 's' : ''}?${skipMsg}`)) return;
+
+  // Generate Berger round-robin rounds
+  const n   = teams.length % 2 === 0 ? teams.length : teams.length + 1;
+  const arr = Array.from({ length: n }, (_, i) => i);
+  const rounds = [];
+  for (let r = 0; r < n - 1; r++) {
+    const pairings = [];
+    for (let i = 0; i < n / 2; i++) {
+      const a = arr[i], b = arr[n - 1 - i];
+      if (a < teams.length && b < teams.length) pairings.push([teams[a].id, teams[b].id]);
+    }
+    rounds.push(pairings);
+    arr.splice(1, 0, arr.pop()); // rotate: keep arr[0] fixed
+  }
+
+  const btn = document.getElementById('as-regen-schedule-btn');
+  if (btn) btn.disabled = true;
+
+  try {
+    // Use position in ALL regular weeks for cycling so rotation stays stable
+    // even when some weeks are skipped (committed)
+    for (let i = 0; i < regularWeeks.length; i++) {
+      const weekEntry = regularWeeks[i];
+      if (!weekIsDraft(weekEntry.week)) continue;
+
+      const newMatchups = rounds[i % rounds.length];
+      const oldMatchups = weekEntry.matchups || [];
+
+      // Delete old match docs
+      for (let mi = 0; mi < oldMatchups.length; mi++) {
+        await window._FB.deleteMatch(`w${weekEntry.week}_m${mi}`);
+      }
+
+      // Update matchups in schedule
+      weekEntry.matchups = newMatchups;
+
+      // Create new match docs
+      await window._FB.createMatchDocs(weekEntry, teams);
+    }
+
+    await window._FB.saveLeagueConfig({ schedule: APP.config.schedule });
+    toast(`Schedule regenerated for ${toUpdate.length} week${toUpdate.length > 1 ? 's' : ''}!`, 'success');
+    renderAdminSettings();
+    renderSchedule();
+  } catch (err) {
+    console.error('[adminRegenerateSchedule]', err);
+    toast('Regeneration failed — ' + (err.message || 'check console'), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+window.adminRegenerateSchedule = adminRegenerateSchedule;
+
 async function adminAddWeek() {
   const schedule = APP.config.schedule || [];
   const maxWeek = schedule.reduce((m, w) => Math.max(m, w.week || 0), 0);
@@ -5333,8 +5596,9 @@ async function adminImportData() {
   }
 }
 
-window.adminHardReset  = adminHardReset;
-window.adminImportData = adminImportData;
+window.adminDeleteLeague = adminDeleteLeague;
+window.adminHardReset    = adminHardReset;
+window.adminImportData   = adminImportData;
 
 // ---- Player Claim Modal ----
 // Shows a modal for an unlinked member to claim a roster player
@@ -5956,8 +6220,12 @@ function openMatch(matchKey) {
   document.getElementById('modal-lo-label').textContent =
     `${t1lo?.name || '?'} vs ${t2lo?.name || '?'}`;
 
-  // Initial pts render (uses previewScores with absent fills for accurate points)
-  _updateModalPts(holes, previewScores, t1lo, t1hi, t2lo, t2hi, hcp1lo, hcp1hi, hcp2lo, hcp2hi);
+  // Only do initial pts render if real scores already exist (reopened draft).
+  // Fresh matches have no scores yet — skip to avoid showing phantom points.
+  const hasRealScores = Object.values(scores).some(arr => Array.isArray(arr) && arr.some(s => s > 0));
+  if (hasRealScores) {
+    _updateModalPts(holes, previewScores, t1lo, t1hi, t2lo, t2hi, hcp1lo, hcp1hi, hcp2lo, hcp2hi);
+  }
 
   // Footer actions
   _renderModalFooter(status, match, uid, isCommish,
@@ -6161,14 +6429,55 @@ function _updateModalPts(holes, scores, t1lo, t1hi, t2lo, t2hi,
   // "plays_both" mode: if t1hi is absent → t1lo plays both t2hi AND t2lo
   //                    if t1lo is absent → t1hi plays both t2hi AND t2lo
   //                    same logic for team 2
-  const t1hiAbsent = playsBoth && !APP.matches[_modalMatchKey]?.scores?.[t1hi.id]?.some(s=>s>0);
-  const t1loAbsent = playsBoth && !APP.matches[_modalMatchKey]?.scores?.[t1lo.id]?.some(s=>s>0);
-  const t2hiAbsent = playsBoth && !APP.matches[_modalMatchKey]?.scores?.[t2hi.id]?.some(s=>s>0);
-  const t2loAbsent = playsBoth && !APP.matches[_modalMatchKey]?.scores?.[t2lo.id]?.some(s=>s>0);
+  // Use absentOverrides config (the actual source of truth) rather than checking
+  // committed scores — committed scores are absent on fresh matches, causing all
+  // players to be falsely detected as absent and typed scores to be silently ignored.
+  const _match     = APP.matches[_modalMatchKey];
+  const _weekNum   = _match?.week;
+  const _absOvr    = APP.config?.absentOverrides || {};
+  const t1hiAbsent = playsBoth && !!(_absOvr[`w${_weekNum}_${t1hi.id}`]);
+  const t1loAbsent = playsBoth && !!(_absOvr[`w${_weekNum}_${t1lo.id}`]);
+  const t2hiAbsent = playsBoth && !!(_absOvr[`w${_weekNum}_${t2hi.id}`]);
+  const t2loAbsent = playsBoth && !!(_absOvr[`w${_weekNum}_${t2lo.id}`]);
+
+  // Both-absent: all players on a team are absent → use synthetic scores instead of sub
+  const t1BothAbsent = t1hiAbsent && t1loAbsent;
+  const t2BothAbsent = t2hiAbsent && t2loAbsent;
+  const _absentBothScoreMode = APP.config?.absentBothScore || 'last_round';
+  const _absentPenalty       = APP.config?.absentPenalty   || '';
+
+  // For both-absent teams, inject synthetic scores (each player uses their own handicap)
+  const eff1hi = t1BothAbsent ? _getBothAbsentScores(t1hi.id, _absentBothScoreMode) : s1hi;
+  const eff1lo = t1BothAbsent ? _getBothAbsentScores(t1lo.id, _absentBothScoreMode) : s1lo;
+  const eff2hi = t2BothAbsent ? _getBothAbsentScores(t2hi.id, _absentBothScoreMode) : s2hi;
+  const eff2lo = t2BothAbsent ? _getBothAbsentScores(t2lo.id, _absentBothScoreMode) : s2lo;
+
+  // Helper: override low net bonus based on absent penalty setting
+  function _penaltyRes(res, p1Absent, p2Absent) {
+    if (_absentPenalty !== 'low_net' || (!p1Absent && !p2Absent)) return res;
+    const lowNetPts = pv?.lowNet ?? 1;
+    const basePts1 = res.pts1 - res.bonus1;
+    const basePts2 = res.pts2 - res.bonus2;
+    if (p1Absent && p2Absent) { res.bonus1 = 0; res.bonus2 = 0; }
+    else if (p1Absent)        { res.bonus1 = 0; res.bonus2 = lowNetPts; }
+    else                      { res.bonus1 = lowNetPts; res.bonus2 = 0; }
+    res.pts1 = Math.round((basePts1 + res.bonus1) * 10) / 10;
+    res.pts2 = Math.round((basePts2 + res.bonus2) * 10) / 10;
+    return res;
+  }
 
   // In plays_both mode, rename the HI/LO labels to reflect who's playing whom
   if (playsBoth) {
-    if (t1hiAbsent) {
+    if (t1BothAbsent && t2BothAbsent) {
+      document.getElementById('modal-hi-label').textContent = `${t1hi.name} vs ${t2hi.name} (both absent)`;
+      document.getElementById('modal-lo-label').textContent = `${t1lo.name} vs ${t2lo.name} (both absent)`;
+    } else if (t1BothAbsent) {
+      document.getElementById('modal-hi-label').textContent = `${t1hi.name} vs ${t2hi.name} (team 1 absent)`;
+      document.getElementById('modal-lo-label').textContent = `${t1lo.name} vs ${t2lo.name} (team 1 absent)`;
+    } else if (t2BothAbsent) {
+      document.getElementById('modal-hi-label').textContent = `${t1hi.name} vs ${t2hi.name} (team 2 absent)`;
+      document.getElementById('modal-lo-label').textContent = `${t1lo.name} vs ${t2lo.name} (team 2 absent)`;
+    } else if (t1hiAbsent) {
       // t1lo plays both t2hi and t2lo
       document.getElementById('modal-hi-label').textContent = `${t1lo.name} vs ${t2hi.name} (sub HI)`;
       document.getElementById('modal-lo-label').textContent = `${t1lo.name} vs ${t2lo.name}`;
@@ -6184,35 +6493,37 @@ function _updateModalPts(holes, scores, t1lo, t1hi, t2lo, t2hi,
     }
   }
 
-  // Determine actual scores for each grid slot — in plays_both absent case, use present player's scores
-  const grid1hi = t1hiAbsent ? s1lo : s1hi;
-  const grid1lo = t1loAbsent ? s1hi : s1lo;
-  const grid2hi = t2hiAbsent ? s2lo : s2hi;
-  const grid2lo = t2loAbsent ? s2hi : s2lo;
-  // Handicaps follow the player who is actually playing
-  const ghcp1hi = t1hiAbsent ? hcp1lo : hcp1hi;
-  const ghcp1lo = t1loAbsent ? hcp1hi : hcp1lo;
-  const ghcp2hi = t2hiAbsent ? hcp2lo : hcp2hi;
-  const ghcp2lo = t2loAbsent ? hcp2hi : hcp2lo;
+  // Determine actual scores for each grid slot:
+  // - both-absent team → use their own synthetic scores (normal matchup)
+  // - single-absent plays_both → present player subs in
+  const grid1hi = t1BothAbsent ? eff1hi : (t1hiAbsent ? s1lo : s1hi);
+  const grid1lo = t1BothAbsent ? eff1lo : (t1loAbsent ? s1hi : s1lo);
+  const grid2hi = t2BothAbsent ? eff2hi : (t2hiAbsent ? s2lo : s2hi);
+  const grid2lo = t2BothAbsent ? eff2lo : (t2loAbsent ? s2hi : s2lo);
+  // Handicaps follow the player who is actually playing (both-absent → own hcp, not swapped)
+  const ghcp1hi = (!t1BothAbsent && t1hiAbsent) ? hcp1lo : hcp1hi;
+  const ghcp1lo = (!t1BothAbsent && t1loAbsent) ? hcp1hi : hcp1lo;
+  const ghcp2hi = (!t2BothAbsent && t2hiAbsent) ? hcp2lo : hcp2hi;
+  const ghcp2lo = (!t2BothAbsent && t2loAbsent) ? hcp2hi : hcp2lo;
 
   const hasHiScores = grid1hi.some(s=>s>0) && grid2hi.some(s=>s>0);
   const hasLoScores = grid1lo.some(s=>s>0) && grid2lo.some(s=>s>0);
 
   if (hasHiScores) {
-    const res = calcMatch(grid1hi, grid2hi, ghcp1hi, ghcp2hi, holes, pv);
-    _renderMatchPts('modal-hi-pts', t1hiAbsent ? t1lo : t1hi, t2hiAbsent ? t2lo : t2hi, res);
+    const res = _penaltyRes(calcMatch(grid1hi, grid2hi, ghcp1hi, ghcp2hi, holes, pv), t1hiAbsent, t2hiAbsent);
+    _renderMatchPts('modal-hi-pts', t1BothAbsent ? t1hi : (t1hiAbsent ? t1lo : t1hi), t2BothAbsent ? t2hi : (t2hiAbsent ? t2lo : t2hi), res);
     _colorScoreGrid('modal-hi-grid', holes, grid1hi, grid2hi, ghcp1hi, ghcp2hi);
   }
   if (hasLoScores) {
-    const res = calcMatch(grid1lo, grid2lo, ghcp1lo, ghcp2lo, holes, pv);
-    _renderMatchPts('modal-lo-pts', t1loAbsent ? t1hi : t1lo, t2loAbsent ? t2hi : t2lo, res);
+    const res = _penaltyRes(calcMatch(grid1lo, grid2lo, ghcp1lo, ghcp2lo, holes, pv), t1loAbsent, t2loAbsent);
+    _renderMatchPts('modal-lo-pts', t1BothAbsent ? t1lo : (t1loAbsent ? t1hi : t1lo), t2BothAbsent ? t2lo : (t2loAbsent ? t2hi : t2lo), res);
     _colorScoreGrid('modal-lo-grid', holes, grid1lo, grid2lo, ghcp1lo, ghcp2lo);
   }
 
   // Team totals (including optional team net bonus)
   if (hasHiScores || hasLoScores) {
-    const hiRes = hasHiScores ? calcMatch(grid1hi, grid2hi, ghcp1hi, ghcp2hi, holes, pv) : {pts1:0, pts2:0, totalNet1:0, totalNet2:0};
-    const loRes = hasLoScores ? calcMatch(grid1lo, grid2lo, ghcp1lo, ghcp2lo, holes, pv) : {pts1:0, pts2:0, totalNet1:0, totalNet2:0};
+    const hiRes = hasHiScores ? _penaltyRes(calcMatch(grid1hi, grid2hi, ghcp1hi, ghcp2hi, holes, pv), t1hiAbsent, t2hiAbsent) : {pts1:0, pts2:0, totalNet1:0, totalNet2:0};
+    const loRes = hasLoScores ? _penaltyRes(calcMatch(grid1lo, grid2lo, ghcp1lo, ghcp2lo, holes, pv), t1loAbsent, t2loAbsent) : {pts1:0, pts2:0, totalNet1:0, totalNet2:0};
 
     // Team net bonus: award teamNet pts to the team with the lower combined net score
     const teamNetPts = pv?.teamNet ?? 0;
@@ -6438,17 +6749,45 @@ async function handleApproveScores() {
     const t2hiAbsent = playsBoth && !(scores[t2hi?.id] || []).some(s=>s>0);
     const t2loAbsent = playsBoth && !(scores[t2lo?.id] || []).some(s=>s>0);
 
-    const sc1hi = t1hiAbsent ? (scores[t1lo?.id]||[]) : (scores[t1hi?.id]||[]);
-    const sc1lo = t1loAbsent ? (scores[t1hi?.id]||[]) : (scores[t1lo?.id]||[]);
-    const sc2hi = t2hiAbsent ? (scores[t2lo?.id]||[]) : (scores[t2hi?.id]||[]);
-    const sc2lo = t2loAbsent ? (scores[t2hi?.id]||[]) : (scores[t2lo?.id]||[]);
-    const hcp1hi = t1hiAbsent ? hcp(t1lo) : hcp(t1hi);
-    const hcp1lo = t1loAbsent ? hcp(t1hi) : hcp(t1lo);
-    const hcp2hi = t2hiAbsent ? hcp(t2lo) : hcp(t2hi);
-    const hcp2lo = t2loAbsent ? hcp(t2hi) : hcp(t2lo);
+    // Both-absent: entire team is out → use synthetic scores (normal HI vs HI, LO vs LO matchup)
+    const t1BothAbsent    = t1hiAbsent && t1loAbsent;
+    const t2BothAbsent    = t2hiAbsent && t2loAbsent;
+    const _absBothMode    = config.absentBothScore || 'last_round';
+    const _absPenalty     = config.absentPenalty   || '';
+    const absentOverrides = config.absentOverrides || {};
 
-    const hiRes  = calcMatch(sc1hi, sc2hi, hcp1hi, hcp2hi, holes, pv);
-    const loRes  = calcMatch(sc1lo, sc2lo, hcp1lo, hcp2lo, holes, pv);
+    const eff1hi = t1BothAbsent ? _getBothAbsentScores(t1hi?.id, _absBothMode) : (scores[t1hi?.id]||[]);
+    const eff1lo = t1BothAbsent ? _getBothAbsentScores(t1lo?.id, _absBothMode) : (scores[t1lo?.id]||[]);
+    const eff2hi = t2BothAbsent ? _getBothAbsentScores(t2hi?.id, _absBothMode) : (scores[t2hi?.id]||[]);
+    const eff2lo = t2BothAbsent ? _getBothAbsentScores(t2lo?.id, _absBothMode) : (scores[t2lo?.id]||[]);
+
+    const sc1hi = t1BothAbsent ? eff1hi : (t1hiAbsent ? (scores[t1lo?.id]||[]) : eff1hi);
+    const sc1lo = t1BothAbsent ? eff1lo : (t1loAbsent ? (scores[t1hi?.id]||[]) : eff1lo);
+    const sc2hi = t2BothAbsent ? eff2hi : (t2hiAbsent ? (scores[t2lo?.id]||[]) : eff2hi);
+    const sc2lo = t2BothAbsent ? eff2lo : (t2loAbsent ? (scores[t2hi?.id]||[]) : eff2lo);
+
+    // Handicaps: both-absent → own hcp; single-absent plays_both → sub's hcp
+    const hcp1hi = (!t1BothAbsent && t1hiAbsent) ? hcp(t1lo) : hcp(t1hi);
+    const hcp1lo = (!t1BothAbsent && t1loAbsent) ? hcp(t1hi) : hcp(t1lo);
+    const hcp2hi = (!t2BothAbsent && t2hiAbsent) ? hcp(t2lo) : hcp(t2hi);
+    const hcp2lo = (!t2BothAbsent && t2loAbsent) ? hcp(t2hi) : hcp(t2lo);
+
+    // Apply absent penalty: absent player's opponent auto-gets the low net bonus
+    function _applyPenalty(res, p1Absent, p2Absent) {
+      if (_absPenalty !== 'low_net' || (!p1Absent && !p2Absent)) return res;
+      const lnp  = pv?.lowNet ?? 1;
+      const bp1  = res.pts1 - res.bonus1;
+      const bp2  = res.pts2 - res.bonus2;
+      if (p1Absent && p2Absent) { res.bonus1 = 0; res.bonus2 = 0; }
+      else if (p1Absent)        { res.bonus1 = 0; res.bonus2 = lnp; }
+      else                      { res.bonus1 = lnp; res.bonus2 = 0; }
+      res.pts1 = Math.round((bp1 + res.bonus1) * 10) / 10;
+      res.pts2 = Math.round((bp2 + res.bonus2) * 10) / 10;
+      return res;
+    }
+
+    const hiRes  = _applyPenalty(calcMatch(sc1hi, sc2hi, hcp1hi, hcp2hi, holes, pv), t1hiAbsent, t2hiAbsent);
+    const loRes  = _applyPenalty(calcMatch(sc1lo, sc2lo, hcp1lo, hcp2lo, holes, pv), t1loAbsent, t2loAbsent);
 
     // Team net bonus: goes to team with lower combined net score
     const teamNetPts = pv?.teamNet ?? 0;
@@ -6555,19 +6894,27 @@ function _getMyTeamId(match) {
 
 async function _commitScoresToPlayerRounds(scores, match) {
   // Write each player's score as a new round entry in playerRounds
-  const date   = match.date || new Date().toISOString().slice(0,10);
-  const nine   = match.nine || 'front';
-  const config = APP.config || {};
-  const holes  = config.course?.scorecard?.[nine] || _defaultHoles(nine);
-  const par    = holes.reduce((a, h) => a + h.par, 0);
+  const date            = match.date || new Date().toISOString().slice(0,10);
+  const nine            = match.nine || 'front';
+  const config          = APP.config || {};
+  const holes           = config.course?.scorecard?.[nine] || _defaultHoles(nine);
+  const par             = holes.reduce((a, h) => a + h.par, 0);
+  const absentOverrides = config.absentOverrides || {};
 
   for (const [playerId, holeScores] of Object.entries(scores)) {
     const grossScore = holeScores.reduce((a, b) => a + (parseInt(b) || 0), 0);
     if (!grossScore) continue;
+
+    // Mark rounds from absent players so they don't affect handicap calculation
+    const isAbsent = !!(absentOverrides[`w${match.week}_${playerId}`]);
+
     const existing = (APP.rounds[playerId] || []).slice();
     // Replace existing round for this match (re-submits shouldn't create duplicates)
     const idx = existing.findIndex(r => r.matchKey === _modalMatchKey);
-    const roundEntry = { date, grossScore, score: grossScore, matchKey: _modalMatchKey, nine };
+    const roundEntry = {
+      date, grossScore, score: grossScore, matchKey: _modalMatchKey, nine,
+      ...(isAbsent ? { excludeHcp: true } : {})
+    };
     if (idx >= 0) {
       existing[idx] = roundEntry;
     } else {
@@ -6689,6 +7036,7 @@ function refreshApp() {
   renderRules();
   renderRecap();
   renderHistory();
+  renderSupport();
   updateNavVisibility();
   if (APP.member?.role === 'commissioner') {
     renderAdminMembers();

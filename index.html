@@ -65,8 +65,11 @@
     <div class="landing-hero-content">
       <div class="splash-icon"><img src="/logo.png" alt="FairwayCaddie" class="hero-logo" /></div>
       <h1 class="splash-title sr-only">FairwayCaddie</h1>
-      <p class="hero-slogan-line1">Built for League Night.</p>
-      <p class="hero-slogan-line2">Because Golf League Rules.</p>
+      <p class="hero-type-label">Golf League Management</p>
+      <div class="hero-slogans">
+        <p class="hero-slogan-line1">Built for League Night.</p>
+        <p class="hero-slogan-line2">Because Golf League Rules.</p>
+      </div>
       <div id="splash-btns" class="splash-cta-group" style="display:none">
         <button class="btn-primary" id="btn-create-league">Get Started Free</button>
         <button class="btn-secondary" id="btn-sign-in">Sign In</button>
@@ -120,10 +123,10 @@
       </div>
       <div class="landing-feature-card">
         <div class="feature-icon">
-          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18" stroke-width="3"/></svg>
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         </div>
-        <h3>Mobile First</h3>
-        <p>Enter scores from the course on any phone. Works offline-ready as a web app.</p>
+        <h3>Score Entry &amp; Approval</h3>
+        <p>Teams enter scores from their phones after the round. The opposing team approves — no spreadsheets, no group texts, no chasing the commish.</p>
       </div>
     </div>
   </div>
@@ -923,6 +926,7 @@
     <button class="nav-tab" data-tab="recap">Recap</button>
     <button class="nav-tab" data-tab="rules">Rules</button>
     <button class="nav-tab" data-tab="history">History</button>
+    <button class="nav-tab" data-tab="support">Help</button>
     <div class="admin-dropdown-wrap" id="admin-dropdown-wrap" style="display:none">
       <button class="admin-dropdown-btn" id="admin-dropdown-btn" onclick="toggleAdminDropdown()" aria-label="Admin menu" aria-haspopup="true" aria-expanded="false">
         Admin <span class="admin-caret">▾</span>
@@ -948,6 +952,7 @@
     <div id="tab-recap"          class="app-tab"></div>
     <div id="tab-rules"          class="app-tab"></div>
     <div id="tab-history"        class="app-tab"></div>
+    <div id="tab-support"        class="app-tab"></div>
     <div id="tab-admin-members"  class="app-tab"></div>
     <div id="tab-admin-scores"   class="app-tab"></div>
     <div id="tab-admin-teams"    class="app-tab"></div>
@@ -1170,6 +1175,7 @@
       archiveAndRollover:   sync.archiveAndRollover,
       disputeScores:        sync.disputeScores,
       uploadPlayerPhoto:    sync.uploadPlayerPhoto,
+      uploadLeagueLogo:     sync.uploadLeagueLogo,
       hardReset:            sync.hardReset,
       deleteLeague:         sync.deleteLeague,
       importLeagueData:     sync.importLeagueData,

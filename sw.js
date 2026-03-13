@@ -1,5 +1,5 @@
 // FairwayCaddie Service Worker — cache shell, network-first for Firebase
-const CACHE = 'fairwaycaddie-v17';
+const CACHE = 'fairwaycaddie-v36';
 const SHELL = [
   '/',
   '/index.html',
